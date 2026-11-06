@@ -7,6 +7,7 @@
 ![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D4?logo=windows&logoColor=white)
 ![Android](https://img.shields.io/badge/Android-7.0%2B-3DDC84?logo=android&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
+[![Release](https://img.shields.io/github/v/release/crdacoga2016-beep/crate)](https://github.com/crdacoga2016-beep/crate/releases/latest)
 
 Crate es un reproductor **100 % local**: no hay streaming, cuentas ni telemetría.
 Lee tu biblioteca de música, la analiza en el dispositivo y mezcla las canciones
@@ -147,6 +148,8 @@ analysis.json**.
 ## Descargas
 
 Los binarios se publican en **GitHub Releases**:
+
+[**Descargar la última versión**](https://github.com/crdacoga2016-beep/crate/releases/latest)
 
 - `Crate-<version>-android.apk`
 - `Crate-<version>-windows-x64.zip`
