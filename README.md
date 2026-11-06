@@ -31,6 +31,8 @@ con transiciones beat-matched cuando hay análisis disponible.
   - Android: decodificación con `MediaCodec` y DSP nativa en Kotlin
     (FFT + autocorrelación + RMS + downbeats).
   - Windows: `ffmpeg` + DSP en Dart dentro de un isolate.
+  - **Ventana de BPM configurable**: 30 s por defecto; 60/90/120 s y canción
+    completa en Windows para bibliotecas más exigentes.
   - Importación del `analysis.json` generado en el PC.
 - **Notificación y pantalla bloqueada en Android** mediante un servicio en
   primer plano con `MediaSessionCompat` nativo (play/pausa/anterior/siguiente/
@@ -57,8 +59,10 @@ con transiciones beat-matched cuando hay análisis disponible.
 
 1. **Análisis**: de cada pista se obtienen BPM, beats/downbeats, `leadIn`,
    `audibleEnd`, puntos de entrada/salida (`mixIn`/`mixOut`), energía y
-   features de timbre. La tonalidad se descartó a propósito para que funcione
-   con bibliotecas multi-género sin depender de tags poco fiables.
+   features de timbre. La ventana de BPM es configurable (30 s por defecto,
+   hasta la canción completa en Windows). La tonalidad se descartó a propósito
+   para que funcione con bibliotecas multi-género sin depender de tags poco
+   fiables.
 2. **Selección**: el estilo de transición se decide con **tempo y energía**
    (o se fuerza manualmente desde Ajustes).
 3. **Mezcla**: se precarga el siguiente deck, se ajusta el tempo con `setRate`
@@ -160,8 +164,9 @@ APK ni builds) para mantener el historial limpio.
 ## Limitaciones conocidas
 
 - Solo reproduce archivos locales; no hay catálogo online ni streaming.
-- El análisis usa un extracto de hasta 30 s, no la canción completa; en temas
-  muy variables (live, mezclas largas) el BPM puede ser aproximado.
+- El análisis usa un extracto configurable (30 s por defecto; canción completa
+  disponible en Windows); en temas muy variables (live, mezclas largas) el BPM
+  puede ser aproximado.
 - Sin separación de stems en tiempo real: el AutoMix es de 2 decks con EQ,
   no un motor de 4 stems.
 - La tonalidad/Camelot no se usa para mezclar (decisión de diseño).

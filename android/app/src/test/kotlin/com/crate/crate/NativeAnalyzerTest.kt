@@ -29,7 +29,12 @@ class NativeAnalyzerTest {
         val rate = 11025
         val seconds = 24
         val samples = clickTrack(rate, seconds, bpm)
-        val result = NativeAnalyzer.analyzeSamples(samples, rate, seconds.toDouble())
+        val result = NativeAnalyzer.analyzeSamples(
+            samples,
+            rate,
+            seconds.toDouble(),
+            30,
+        )
         assertTrue("analysis should not be null", result != null)
         val detected = (result!!["bpm"] as Double)
         assertEquals(bpm, detected, 4.0)

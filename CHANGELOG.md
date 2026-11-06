@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- Ventana de análisis BPM configurable (30 s por defecto, 60/90/120 s y
+  canción completa en Windows).
+- Botón para reanalizar toda la biblioteca con la ventana elegida.
+- Analizador Android y fallback WAV aceptan la ventana de análisis.
+- Windows: la ventana elegida se aplica al análisis local con `ffmpeg` + Dart.
+
 ## 0.5.0
 
 - Analizador nativo en Android (`NativeAnalyzer.kt`): decodificación con

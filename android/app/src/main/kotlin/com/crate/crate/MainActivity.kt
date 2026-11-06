@@ -98,18 +98,20 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "analyzeNative" -> {
                     val path = call.argument<String>("path")
+                    val scanSeconds = call.argument<Int>("scanSeconds") ?: 30
                     if (path == null) {
                         result.error("analysis", "path missing", null)
                     } else {
-                        analyzeNative(path, result)
+                        analyzeNative(path, scanSeconds, result)
                     }
                 }
                 "decodeToWav" -> {
                     val path = call.argument<String>("path")
+                    val scanSeconds = call.argument<Int>("scanSeconds") ?: 30
                     if (path == null) {
                         result.error("decode", "path missing", null)
                     } else {
-                        decodeToWav(path, result)
+                        decodeToWav(path, scanSeconds, result)
                     }
                 }
                 else -> result.notImplemented()
@@ -235,10 +237,14 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun analyzeNative(path: String, result: MethodChannel.Result) {
+    private fun analyzeNative(
+        path: String,
+        scanSeconds: Int,
+        result: MethodChannel.Result,
+    ) {
         Thread {
             val analysis = try {
-                NativeAnalyzer.analyze(path)
+                NativeAnalyzer.analyze(path, scanSeconds)
             } catch (_: Exception) {
                 null
             }
@@ -252,7 +258,11 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    private fun decodeToWav(path: String, result: MethodChannel.Result) {
+    private fun decodeToWav(
+        path: String,
+        scanSeconds: Int,
+        result: MethodChannel.Result,
+    ) {
         Thread {
             var extractor: MediaExtractor? = null
             var codec: MediaCodec? = null
@@ -301,6 +311,12 @@ class MainActivity : FlutterActivity() {
 
                 val output = File(cacheDir, "analysis_${System.currentTimeMillis()}.wav")
                 var totalBytes = 0
+                val maxSeconds = if (scanSeconds <= 0) {
+                    600.0
+                } else {
+                    scanSeconds + 30.0
+                }
+                val maxBytes = (maxSeconds * targetRate * 2).toInt()
 
                 FileOutputStream(output).use { stream ->
                     stream.write(ByteArray(44))
@@ -387,7 +403,7 @@ class MainActivity : FlutterActivity() {
                                 val outputBytes = resampled.toByteArray()
                                 stream.write(outputBytes)
                                 totalBytes += outputBytes.size
-                                if (totalBytes >= 30 * targetRate * 2) {
+                                if (totalBytes >= maxBytes) {
                                     outputDone = true
                                 }
                             }

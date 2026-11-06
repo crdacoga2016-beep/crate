@@ -14,7 +14,10 @@ import '../models/track.dart';
 class DeviceAnalyzer {
   static const MethodChannel _channel = MethodChannel('crate/analysis');
 
-  Future<Map<String, dynamic>?> analyze(Track track) async {
+  Future<Map<String, dynamic>?> analyze(
+    Track track, {
+    int scanSeconds = 30,
+  }) async {
     String? wavPath;
     double? fullDuration;
     try {
@@ -22,7 +25,7 @@ class DeviceAnalyzer {
         try {
           final native = await _channel.invokeMethod<Map<Object?, Object?>>(
             'analyzeNative',
-            {'path': track.path},
+            {'path': track.path, 'scanSeconds': scanSeconds},
           );
           if (native != null) {
             final mapped = native.map(
@@ -33,7 +36,7 @@ class DeviceAnalyzer {
         } catch (_) {}
         final result = await _channel.invokeMethod<Map<Object?, Object?>>(
           'decodeToWav',
-          {'path': track.path},
+          {'path': track.path, 'scanSeconds': scanSeconds},
         );
         wavPath = result?['path'] as String?;
         fullDuration = (result?['duration'] as num?)?.toDouble();
@@ -50,7 +53,7 @@ class DeviceAnalyzer {
       if (wavPath == null) return null;
       final current = wavPath;
       return await Isolate.run(
-        () => analyzeWavFile(current, fullDuration),
+        () => analyzeWavFile(current, fullDuration, scanSeconds),
       );
     } catch (_) {
       return null;
@@ -129,6 +132,7 @@ class DeviceAnalyzer {
 Future<Map<String, dynamic>?> analyzeWavFile(
   String path, [
   double? fullDuration,
+  int scanSeconds = 30,
 ]) async {
   try {
     final bytes = await File(path).readAsBytes();
@@ -155,10 +159,19 @@ Future<Map<String, dynamic>?> analyzeWavFile(
             ? fullDuration
             : rms.audibleEnd;
 
-    final excerptStart = math.max(rms.leadIn, wavDuration * 0.15);
-    var excerptEnd = math.min(rms.audibleEnd, excerptStart + 20);
+    final wholeTrack = scanSeconds <= 0;
+    final analysisSeconds = wholeTrack
+        ? math.max(10.0, rms.audibleEnd - rms.leadIn)
+        : scanSeconds.toDouble();
+    final excerptStart = wholeTrack
+        ? math.max(0.0, rms.leadIn)
+        : math.max(rms.leadIn, wavDuration * 0.15);
+    var excerptEnd = math.min(wavDuration, excerptStart + analysisSeconds);
+    if (rms.audibleEnd > excerptStart && rms.audibleEnd < excerptEnd) {
+      excerptEnd = rms.audibleEnd;
+    }
     if (excerptEnd - excerptStart < 10) {
-      excerptEnd = math.min(wavDuration, excerptStart + 20);
+      excerptEnd = math.min(wavDuration, excerptStart + 10);
     }
     final startIndex = (excerptStart * sampleRate)
         .floor()

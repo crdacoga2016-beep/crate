@@ -102,7 +102,7 @@ class SettingsScreen extends StatelessWidget {
                         )
                       : TextButton(
                           onPressed: () => _analyzeAll(context, state),
-                          child: const Text('Analizar todo'),
+                          child: const Text('Pendientes'),
                         ),
                 ),
                 SwitchListTile(
@@ -112,6 +112,48 @@ class SettingsScreen extends StatelessWidget {
                   title: const Text('Analizar automáticamente'),
                   subtitle: const Text(
                     'Analiza la pista actual y las siguientes',
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.straighten_rounded),
+                  title: const Text('Ventana de análisis BPM'),
+                  subtitle: Text(
+                    state.analysisScanSeconds == 0
+                        ? 'Canción completa · más lento'
+                        : '${state.analysisScanSeconds} s por pista · '
+                            'más segundos = mejor BPM',
+                  ),
+                  trailing: DropdownButton<int>(
+                    value: _scanOptions(state).contains(
+                          state.analysisScanSeconds,
+                        )
+                        ? state.analysisScanSeconds
+                        : 30,
+                    dropdownColor: const Color(0xFF1B1B25),
+                    underline: const SizedBox.shrink(),
+                    items: [
+                      for (final seconds in _scanOptions(state))
+                        DropdownMenuItem(
+                          value: seconds,
+                          child: Text(seconds == 0 ? 'Todo' : '$seconds s'),
+                        ),
+                    ],
+                    onChanged: (value) {
+                      if (value != null) state.setAnalysisScanSeconds(value);
+                    },
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.refresh_rounded),
+                  title: const Text('Reanalizar biblioteca'),
+                  subtitle: const Text(
+                    'Aplica la ventana actual a todas las pistas',
+                  ),
+                  trailing: TextButton(
+                    onPressed: state.analyzing
+                        ? null
+                        : () => _reanalyzeAll(context, state),
+                    child: const Text('Reanalizar'),
                   ),
                 ),
                 if (Platform.isAndroid)
@@ -354,7 +396,7 @@ class SettingsScreen extends StatelessWidget {
                   leading: Icon(Icons.info_outline_rounded),
                   title: Text('Crate'),
                   subtitle: Text(
-                    'Reproductor local con AutoMix. v0.5.0',
+                    'Reproductor local con AutoMix. v0.6.0',
                   ),
                 ),
                 ListTile(
@@ -453,6 +495,57 @@ class SettingsScreen extends StatelessWidget {
       return;
     }
     await state.analyzeNow();
+  }
+
+  List<int> _scanOptions(AppState state) {
+    final options = <int>[30, 60, 90, 120];
+    if (Platform.isWindows) options.add(0);
+    if (state.analysisScanSeconds == 0 && !options.contains(0)) {
+      options.add(0);
+    } else if (state.analysisScanSeconds > 0 &&
+        !options.contains(state.analysisScanSeconds)) {
+      options.add(state.analysisScanSeconds);
+      options.sort();
+    }
+    return options;
+  }
+
+  Future<void> _reanalyzeAll(
+    BuildContext context,
+    AppState state,
+  ) async {
+    if (Platform.isAndroid && state.isPlaying) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Pausa la reproducción para reanalizar'),
+        ),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: const Color(0xFF15151E),
+        title: const Text('Reanalizar biblioteca'),
+        content: Text(
+          'Se volverán a analizar las ${state.library.length} pistas con '
+          'una ventana de ${state.analysisScanSeconds == 0 ? 'canción completa' : '${state.analysisScanSeconds} s'}. '
+          'Puede tardar bastante.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Reanalizar'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await state.analyzeNow(force: true);
   }
 
   Future<void> _addRoot(BuildContext context, AppState state) async {

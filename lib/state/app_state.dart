@@ -38,6 +38,7 @@ class AppState extends ChangeNotifier {
   bool skipSilence = true;
   bool smartShuffle = false;
   bool autoAnalyze = true;
+  int analysisScanSeconds = 30;
   bool analyzing = false;
   bool notificationPermission = false;
   bool notificationsEnabled = false;
@@ -129,6 +130,10 @@ class AppState extends ChangeNotifier {
     skipSilence = _prefs!.getBool('skipSilence') ?? true;
     smartShuffle = _prefs!.getBool('smartShuffle') ?? false;
     autoAnalyze = _prefs!.getBool('autoAnalyze') ?? true;
+    analysisScanSeconds = _prefs!.getInt('analysisScanSeconds') ?? 30;
+    if (analysisScanSeconds != 0) {
+      analysisScanSeconds = analysisScanSeconds.clamp(15, 300);
+    }
     transitionStyle = _prefs!.getString('transitionStyle') ?? 'auto';
     crossfadeSeconds = _prefs!.getDouble('crossfadeSeconds') ?? 8;
     volume = _prefs!.getDouble('volume') ?? 1;
@@ -926,7 +931,10 @@ class AppState extends ChangeNotifier {
       analysisCurrent = track.title;
       logLine('analysis start: ${track.path}');
       _safeNotify();
-      final data = await _analyzer.analyze(track);
+      final data = await _analyzer.analyze(
+        track,
+        scanSeconds: analysisScanSeconds,
+      );
       if (data != null) {
         await repository.saveAnalysis(track.path, data);
         final analysis = TrackAnalysis.fromJson(data);
@@ -941,7 +949,7 @@ class AppState extends ChangeNotifier {
         }
         logLine(
           'analysis done: ${track.path} '
-          'bpm=${data['bpm']} key=${data['key']}',
+          'bpm=${data['bpm']} scan=${analysisScanSeconds}s',
         );
       } else {
         _analysisFailed.add(track.id);
@@ -956,15 +964,29 @@ class AppState extends ChangeNotifier {
     _safeNotify();
   }
 
-  Future<void> analyzeNow() async {
+  Future<void> analyzeNow({bool force = false}) async {
     if (defaultTargetPlatform == TargetPlatform.android && player.playing) {
       return;
     }
     _analysisFailed.clear();
-    final pending = library
-        .where((t) => t.analysis == null && !_analysisFailed.contains(t.id))
-        .toList();
+    final pending = force
+        ? List<Track>.of(library)
+        : library
+            .where(
+              (t) => t.analysis == null && !_analysisFailed.contains(t.id),
+            )
+            .toList();
     await _analyzeTracks(pending);
+  }
+
+  void setAnalysisScanSeconds(int value) {
+    if (value != 0) {
+      analysisScanSeconds = value.clamp(15, 300);
+    } else {
+      analysisScanSeconds = 0;
+    }
+    _prefs?.setInt('analysisScanSeconds', analysisScanSeconds);
+    _safeNotify();
   }
 
   void setAutoAnalyze(bool value) {

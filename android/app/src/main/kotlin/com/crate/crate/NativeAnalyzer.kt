@@ -24,16 +24,17 @@ import kotlin.math.sqrt
  */
 object NativeAnalyzer {
     private const val TARGET_RATE = 11025
-    private const val MAX_SECONDS = 30
+    private const val MAX_FULL_SECONDS = 600
     private const val FRAME_SIZE = 2048
     private const val HOP = 512
 
-    fun analyze(path: String): Map<String, Any?>? {
-        val decoded = decodeExcerpt(path) ?: return null
+    fun analyze(path: String, scanSeconds: Int): Map<String, Any?>? {
+        val decoded = decodeExcerpt(path, scanSeconds) ?: return null
         return analyzeSamples(
             decoded.samples,
             decoded.sampleRate,
             decoded.fullDuration,
+            scanSeconds,
         )
     }
 
@@ -43,7 +44,20 @@ object NativeAnalyzer {
         val fullDuration: Double,
     )
 
-    private fun decodeExcerpt(path: String): Decoded? {
+    private fun decideDecodeSeconds(
+        fullDuration: Double,
+        scanSeconds: Int,
+    ): Int {
+        val requested = if (scanSeconds <= 0) {
+            MAX_FULL_SECONDS.toDouble()
+        } else {
+            (scanSeconds + 30).toDouble()
+        }
+        val available = if (fullDuration > 0) fullDuration else requested
+        return min(available, requested).toInt().coerceAtLeast(10)
+    }
+
+    private fun decodeExcerpt(path: String, scanSeconds: Int): Decoded? {
         var extractor: MediaExtractor? = null
         var codec: MediaCodec? = null
         try {
@@ -86,7 +100,8 @@ object NativeAnalyzer {
                 1
             }
 
-            val capacity = MAX_SECONDS * TARGET_RATE
+            val capacity = decideDecodeSeconds(fullDuration, scanSeconds) *
+                TARGET_RATE
             val pcm = ShortArray(capacity)
             var pcmCount = 0
 
@@ -227,6 +242,7 @@ object NativeAnalyzer {
         samples: FloatArray,
         sampleRate: Int,
         fullDuration: Double,
+        scanSeconds: Int,
     ): Map<String, Any?>? {
         if (samples.isEmpty() || sampleRate <= 0) return null
 
@@ -236,10 +252,23 @@ object NativeAnalyzer {
         val leadIn = rms.leadIn
         val audibleEnd = if (fullDuration > wavDuration) fullDuration else rms.audibleEnd
 
-        val excerptStart = max(rms.leadIn, wavDuration * 0.15)
-        var excerptEnd = min(rms.audibleEnd, excerptStart + 20.0)
+        val wholeTrack = scanSeconds <= 0
+        val analysisSeconds = if (wholeTrack) {
+            max(10.0, rms.audibleEnd - rms.leadIn)
+        } else {
+            scanSeconds.toDouble()
+        }
+        val excerptStart = if (wholeTrack) {
+            max(0.0, rms.leadIn)
+        } else {
+            max(rms.leadIn, wavDuration * 0.15)
+        }
+        var excerptEnd = min(wavDuration, excerptStart + analysisSeconds)
+        if (rms.audibleEnd > excerptStart && rms.audibleEnd < excerptEnd) {
+            excerptEnd = rms.audibleEnd
+        }
         if (excerptEnd - excerptStart < 10.0) {
-            excerptEnd = min(wavDuration, excerptStart + 20.0)
+            excerptEnd = min(wavDuration, excerptStart + 10.0)
         }
         val startIndex = floor(excerptStart * sampleRate)
             .toInt()

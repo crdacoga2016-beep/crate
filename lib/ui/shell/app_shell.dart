@@ -159,7 +159,7 @@ class _Rail extends StatelessWidget {
       trailing: const Padding(
         padding: EdgeInsets.symmetric(vertical: 18, horizontal: 8),
         child: Text(
-          'v0.5.0',
+          'v0.6.0',
           style: TextStyle(fontSize: 10, color: Color(0xFF5A5A6A)),
         ),
       ),
