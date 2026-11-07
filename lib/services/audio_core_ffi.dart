@@ -1,14 +1,33 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 
 typedef _CrateAudioCoreVersion = Pointer<Uint8> Function();
+typedef _CrateAudioCoreProcessLimiterNative = Float Function(
+  Pointer<Float> buffer,
+  Int32 numSamples,
+  Float ceilingDb,
+);
+typedef _CrateAudioCoreProcessLimiter = double Function(
+  Pointer<Float> buffer,
+  int numSamples,
+  double ceilingDb,
+);
+typedef _SystemMallocNative = Pointer<Void> Function(UintPtr);
+typedef _SystemMalloc = Pointer<Void> Function(int);
+typedef _SystemFreeNative = Void Function(Pointer<Void>);
+typedef _SystemFree = void Function(Pointer<Void>);
 
 class AudioCoreFfi {
   const AudioCoreFfi._();
 
   static DynamicLibrary? _library;
+  static DynamicLibrary? _systemLibrary;
+  static _SystemMalloc? _mallocFunction;
+  static _SystemFree? _freeFunction;
   static _CrateAudioCoreVersion? _version;
+  static _CrateAudioCoreProcessLimiter? _processLimiter;
 
   static bool get isAvailable => version != null;
 
@@ -36,6 +55,52 @@ class AudioCoreFfi {
     return result ?? 'no disponible';
   }
 
+  static double? processLimiter(Float32List samples, double ceilingDb) {
+    if (samples.isEmpty || !ceilingDb.isFinite) return null;
+    try {
+      final function = _loadProcessLimiter();
+      if (function == null) return null;
+      final pointer = _allocateNative(samples.length * 4);
+      if (pointer == null) return null;
+      final floatPointer = pointer.cast<Float>();
+      try {
+        floatPointer.asTypedList(samples.length).setAll(0, samples);
+        final appliedGain = function.call(
+          floatPointer,
+          samples.length,
+          ceilingDb,
+        );
+        samples.setAll(0, floatPointer.asTypedList(samples.length));
+        return appliedGain;
+      } finally {
+        _freeNative(pointer);
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Pointer<Void>? _allocateNative(int byteCount) {
+    if (byteCount <= 0) return null;
+    final library = _systemLibrary ??= DynamicLibrary.open(_systemLibraryName);
+    final mallocFunction = _mallocFunction ??= library
+        .lookupFunction<_SystemMallocNative, _SystemMalloc>('malloc');
+    final pointer = mallocFunction(byteCount);
+    return pointer == nullptr ? null : pointer;
+  }
+
+  static void _freeNative(Pointer<Void> pointer) {
+    final library = _systemLibrary ??= DynamicLibrary.open(_systemLibraryName);
+    final freeFunction = _freeFunction ??= library
+        .lookupFunction<_SystemFreeNative, _SystemFree>('free');
+    freeFunction(pointer);
+  }
+
+  static String get _systemLibraryName {
+    if (Platform.isWindows) return 'msvcrt.dll';
+    return 'libc.so';
+  }
+
   static _CrateAudioCoreVersion? _loadVersion() {
     if (_version != null) return _version;
     final library = _library ??= DynamicLibrary.open(_libraryName);
@@ -44,6 +109,18 @@ class AudioCoreFfi {
           'crate_audio_core_version',
         );
     _version = function;
+    return function;
+  }
+
+  static _CrateAudioCoreProcessLimiter? _loadProcessLimiter() {
+    if (_processLimiter != null) return _processLimiter;
+    final library = _library ??= DynamicLibrary.open(_libraryName);
+    final function = library
+        .lookupFunction<
+          _CrateAudioCoreProcessLimiterNative,
+          _CrateAudioCoreProcessLimiter
+        >('crate_audio_core_process_limiter');
+    _processLimiter = function;
     return function;
   }
 

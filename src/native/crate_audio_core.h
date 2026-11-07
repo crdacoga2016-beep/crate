@@ -11,6 +11,7 @@ extern "C" {
 #endif
 
 CRATE_AUDIO_CORE_API const char* crate_audio_core_version(void);
+CRATE_AUDIO_CORE_API float crate_audio_core_process_limiter(float* buffer, int num_samples, float ceiling_db);
 
 #ifdef __cplusplus
 }

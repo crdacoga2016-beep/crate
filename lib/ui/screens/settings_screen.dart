@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -385,6 +387,7 @@ class SettingsScreen extends StatelessWidget {
                   title: const Text('Crate Audio Core'),
                   subtitle: Text(AudioCoreFfi.versionLabel),
                 ),
+                const _LimiterProbeTile(),
                 const ListTile(
                   leading: Icon(Icons.storage_rounded),
                   title: Text('100% local'),
@@ -592,5 +595,51 @@ class _Section extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+class _LimiterProbeTile extends StatefulWidget {
+  const _LimiterProbeTile();
+
+  @override
+  State<_LimiterProbeTile> createState() => _LimiterProbeTileState();
+}
+
+class _LimiterProbeTileState extends State<_LimiterProbeTile> {
+  String? _result;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.bolt_outlined),
+      title: const Text('Probar limitador'),
+      subtitle: Text(
+        _result ?? 'No modifica el audio actual; usa un buffer de prueba.',
+      ),
+      trailing: FilledButton(onPressed: _runProbe, child: const Text('Probar')),
+    );
+  }
+
+  void _runProbe() {
+    final samples = Float32List.fromList([0.2, -0.2, 2.0, -1.5, 0.3]);
+    final appliedGain = AudioCoreFfi.processLimiter(samples, -1.0);
+    if (appliedGain == null) {
+      setState(() {
+        _result = 'Crate Audio Core no disponible';
+      });
+      return;
+    }
+    var peak = 0.0;
+    for (final sample in samples) {
+      peak = math.max(peak, sample.abs());
+    }
+    final reductionDb = appliedGain > 0.0
+        ? -20.0 * math.log(appliedGain) / math.ln10
+        : 0.0;
+    setState(() {
+      _result =
+          'Reducción ${reductionDb.toStringAsFixed(1)} dB; '
+          'pico resultante ${peak.toStringAsFixed(3)}';
+    });
   }
 }
