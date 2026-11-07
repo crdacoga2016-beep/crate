@@ -22,6 +22,7 @@ const double eqGainStepDb = 0.5;
 const double eqBandQ = 1.0;
 const double smartHeadroomSafetyDb = 0.5;
 const double speakerPreampBoostDb = 3.0;
+const double bluetoothPreampBoostDb = 2.0;
 const Set<int> speakerHeadroomIgnoredFrequencies = {31, 62};
 const double eqResponseDefaultSampleRate = 48000.0;
 
@@ -92,6 +93,11 @@ const List<EqPreset> eqPresets = [
     gainsDb: [0.5, 1.0, 0.5, -0.5, 0.0, 0.5, 1.0, 1.0, 0.5, 0.5],
   ),
   EqPreset(
+    id: 'bluetooth_live',
+    label: 'Bluetooth Live',
+    gainsDb: [0.0, 0.0, 2.0, 2.5, 0.5, 0.0, 0.0, 2.0, 1.0, 0.0],
+  ),
+  EqPreset(
     id: 'speaker_powerful',
     label: 'Altavoz Potente',
     gainsDb: [0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 2.0, 2.5, 1.0, 0.0],
@@ -158,8 +164,13 @@ class EqState {
     double manualPreampDb,
     AudioOutputProfile profile,
   ) {
-    return manualPreampDb +
-        (profile == AudioOutputProfile.speaker ? speakerPreampBoostDb : 0.0);
+    final boost = switch (profile) {
+      AudioOutputProfile.speaker => speakerPreampBoostDb,
+      AudioOutputProfile.bluetooth => bluetoothPreampBoostDb,
+      AudioOutputProfile.headphones => 0.0,
+      AudioOutputProfile.usb => 0.0,
+    };
+    return manualPreampDb + boost;
   }
 
   EqState copyWith({

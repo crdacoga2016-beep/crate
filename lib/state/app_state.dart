@@ -499,6 +499,9 @@ class AppState extends ChangeNotifier {
     if (profile == AudioOutputProfile.speaker) {
       eqProfiles[profile] = EqState.fromPreset('speaker_powerful');
     }
+    if (profile == AudioOutputProfile.bluetooth) {
+      eqProfiles[profile] = EqState.fromPreset('bluetooth_live');
+    }
     _queueEqUpdate();
     _safeNotify();
   }

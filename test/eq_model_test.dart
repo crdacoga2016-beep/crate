@@ -30,6 +30,7 @@ void main() {
         'soft_bass',
         'vocal',
         'bluetooth',
+        'bluetooth_live',
         'speaker_powerful',
       ]);
       for (final preset in eqPresets) {
@@ -90,6 +91,45 @@ void main() {
       expect(state.responseDbAtHz(100.0), greaterThan(0.0));
       expect(state.responseDbAtHz(100.0), lessThan(6.0));
     });
+
+    test(
+      'el Bluetooth Live protege todos los graves y aplica +2 dB de preamp',
+      () {
+        final preset = EqState.fromPreset('bluetooth_live');
+        final subBassState = EqState(
+          gainsDb: [12.0, 12.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        );
+
+        expect(preset.gainsDb, [
+          0.0,
+          0.0,
+          2.0,
+          2.5,
+          0.5,
+          0.0,
+          0.0,
+          2.0,
+          1.0,
+          0.0,
+        ]);
+        expect(
+          subBassState.maximumResponseDbFor(AudioOutputProfile.bluetooth),
+          greaterThan(12.0),
+        );
+        expect(
+          subBassState.smartHeadroomDbFor(AudioOutputProfile.bluetooth),
+          lessThan(-12.5),
+        );
+        expect(
+          preset.effectivePreampDbFor(-1.0, AudioOutputProfile.bluetooth),
+          1.0,
+        );
+        expect(
+          preset.effectivePreampDbFor(-1.0, AudioOutputProfile.headphones),
+          -1.0,
+        );
+      },
+    );
 
     test(
       'el preset Altavoz Potente activa el cuerpo y agudos sin subgraves',
