@@ -14,6 +14,24 @@ typedef _CrateAudioCoreProcessLimiter = double Function(
   int numSamples,
   double ceilingDb,
 );
+typedef _CrateAudioCoreProcessLimiterAdvancedNative = Float Function(
+  Pointer<Float> buffer,
+  Int32 numSamples,
+  Float ceilingDb,
+  Float lookaheadMs,
+  Float attackMs,
+  Float releaseMs,
+  Int32 sampleRate,
+);
+typedef _CrateAudioCoreProcessLimiterAdvanced = double Function(
+  Pointer<Float> buffer,
+  int numSamples,
+  double ceilingDb,
+  double lookaheadMs,
+  double attackMs,
+  double releaseMs,
+  int sampleRate,
+);
 typedef _SystemMallocNative = Pointer<Void> Function(UintPtr);
 typedef _SystemMalloc = Pointer<Void> Function(int);
 typedef _SystemFreeNative = Void Function(Pointer<Void>);
@@ -28,6 +46,7 @@ class AudioCoreFfi {
   static _SystemFree? _freeFunction;
   static _CrateAudioCoreVersion? _version;
   static _CrateAudioCoreProcessLimiter? _processLimiter;
+  static _CrateAudioCoreProcessLimiterAdvanced? _processLimiterAdvanced;
 
   static bool get isAvailable => version != null;
 
@@ -80,6 +99,44 @@ class AudioCoreFfi {
     }
   }
 
+  static double? processLimiterAdvanced(
+    Float32List samples, {
+    double ceilingDb = -1.0,
+    double lookaheadMs = 5.0,
+    double attackMs = 1.0,
+    double releaseMs = 50.0,
+    int sampleRate = 48000,
+  }) {
+    if (samples.isEmpty || sampleRate <= 0) return null;
+    if (!ceilingDb.isFinite || !lookaheadMs.isFinite) return null;
+    if (!attackMs.isFinite || !releaseMs.isFinite) return null;
+    try {
+      final function = _loadProcessLimiterAdvanced();
+      if (function == null) return null;
+      final pointer = _allocateNative(samples.length * 4);
+      if (pointer == null) return null;
+      final floatPointer = pointer.cast<Float>();
+      try {
+        floatPointer.asTypedList(samples.length).setAll(0, samples);
+        final appliedGain = function.call(
+          floatPointer,
+          samples.length,
+          ceilingDb,
+          lookaheadMs,
+          attackMs,
+          releaseMs,
+          sampleRate,
+        );
+        samples.setAll(0, floatPointer.asTypedList(samples.length));
+        return appliedGain;
+      } finally {
+        _freeNative(pointer);
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Pointer<Void>? _allocateNative(int byteCount) {
     if (byteCount <= 0) return null;
     final library = _systemLibrary ??= DynamicLibrary.open(_systemLibraryName);
@@ -109,6 +166,18 @@ class AudioCoreFfi {
           'crate_audio_core_version',
         );
     _version = function;
+    return function;
+  }
+
+  static _CrateAudioCoreProcessLimiterAdvanced? _loadProcessLimiterAdvanced() {
+    if (_processLimiterAdvanced != null) return _processLimiterAdvanced;
+    final library = _library ??= DynamicLibrary.open(_libraryName);
+    final function = library
+        .lookupFunction<
+          _CrateAudioCoreProcessLimiterAdvancedNative,
+          _CrateAudioCoreProcessLimiterAdvanced
+        >('crate_audio_core_process_limiter_advanced');
+    _processLimiterAdvanced = function;
     return function;
   }
 

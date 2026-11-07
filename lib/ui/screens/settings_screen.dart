@@ -607,31 +607,67 @@ class _LimiterProbeTile extends StatefulWidget {
 
 class _LimiterProbeTileState extends State<_LimiterProbeTile> {
   String? _result;
+  List<double> _gainTrajectory = const [];
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: const Icon(Icons.bolt_outlined),
-      title: const Text('Probar limitador'),
-      subtitle: Text(
-        _result ?? 'No modifica el audio actual; usa un buffer de prueba.',
-      ),
-      trailing: FilledButton(onPressed: _runProbe, child: const Text('Probar')),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ListTile(
+          leading: const Icon(Icons.bolt_outlined),
+          title: const Text('Probar limitador'),
+          subtitle: Text(
+            _result ?? 'No modifica el audio actual; usa un buffer de prueba.',
+          ),
+          trailing: FilledButton(
+            onPressed: _runProbe,
+            child: const Text('Probar'),
+          ),
+        ),
+        if (_gainTrajectory.length > 1)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            child: SizedBox(
+              height: 64,
+              child: CustomPaint(painter: _LimiterGainPainter(_gainTrajectory)),
+            ),
+          ),
+      ],
     );
   }
 
   void _runProbe() {
-    final samples = Float32List.fromList([0.2, -0.2, 2.0, -1.5, 0.3]);
-    final appliedGain = AudioCoreFfi.processLimiter(samples, -1.0);
+    const sampleRate = 48000;
+    final original = List<double>.generate(240, (index) {
+      final sign = index.isEven ? 1.0 : -1.0;
+      if (index >= 110 && index < 115) return sign * 2.5;
+      if (index >= 115 && index < 125) return sign * 1.8;
+      return sign * 0.8;
+    });
+    final samples = Float32List.fromList(original);
+    final appliedGain = AudioCoreFfi.processLimiterAdvanced(
+      samples,
+      ceilingDb: -1.0,
+      lookaheadMs: 5.0,
+      attackMs: 1.0,
+      releaseMs: 50.0,
+      sampleRate: sampleRate,
+    );
     if (appliedGain == null) {
       setState(() {
         _result = 'Crate Audio Core no disponible';
+        _gainTrajectory = const [];
       });
       return;
     }
     var peak = 0.0;
-    for (final sample in samples) {
-      peak = math.max(peak, sample.abs());
+    final gains = <double>[];
+    for (var index = 0; index < samples.length; index++) {
+      peak = math.max(peak, samples[index].abs());
+      if (original[index].abs() > 0.05) {
+        gains.add(samples[index] / original[index]);
+      }
     }
     final reductionDb = appliedGain > 0.0
         ? -20.0 * math.log(appliedGain) / math.ln10
@@ -640,6 +676,53 @@ class _LimiterProbeTileState extends State<_LimiterProbeTile> {
       _result =
           'Reducción ${reductionDb.toStringAsFixed(1)} dB; '
           'pico resultante ${peak.toStringAsFixed(3)}';
+      _gainTrajectory = gains;
     });
+  }
+}
+
+class _LimiterGainPainter extends CustomPainter {
+  const _LimiterGainPainter(this.gains);
+
+  final List<double> gains;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty || gains.length < 2) return;
+    final borderPaint = Paint()
+      ..color = const Color(0xFF2A2A35)
+      ..strokeWidth = 1;
+    canvas.drawLine(
+      Offset(0, size.height),
+      Offset(size.width, size.height),
+      borderPaint,
+    );
+    canvas.drawLine(Offset(0, 0), Offset(size.width, 0), borderPaint);
+
+    final minimum = gains.fold(1.0, (value, gain) => math.min(value, gain));
+    final maximum = gains.fold(0.0, (value, gain) => math.max(value, gain));
+    final span = (maximum - minimum).abs() < 0.0001 ? 1.0 : maximum - minimum;
+    final paint = Paint()
+      ..color = const Color(0xFF7B8CFF)
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    final path = Path();
+    for (var index = 0; index < gains.length; index++) {
+      final x = size.width * index / (gains.length - 1);
+      final y = size.height - (gains[index] - minimum) / span * size.height;
+      if (index == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _LimiterGainPainter oldDelegate) {
+    return oldDelegate.gains != gains;
   }
 }
