@@ -10,6 +10,7 @@ import '../services/device_analyzer.dart';
 import '../services/library_repository.dart';
 import '../services/media_notification.dart';
 import '../services/player_service.dart';
+import '../util/gain_calculation.dart';
 import '../util/log.dart';
 
 typedef _FeatureStats = ({List<double> means, List<double> stds});
@@ -61,10 +62,9 @@ class AppState extends ChangeNotifier {
   Track? get current =>
       index >= 0 && index < queue.length ? queue[index] : null;
 
-  List<Track> get upNext =>
-      index >= 0 && index + 1 < queue.length
-          ? queue.sublist(index + 1)
-          : const [];
+  List<Track> get upNext => index >= 0 && index + 1 < queue.length
+      ? queue.sublist(index + 1)
+      : const [];
 
   double get scanFraction =>
       scanTotal == 0 ? 0 : (scanDone / scanTotal).clamp(0, 1);
@@ -136,10 +136,26 @@ class AppState extends ChangeNotifier {
     }
     transitionStyle = _prefs!.getString('transitionStyle') ?? 'auto';
     crossfadeSeconds = _prefs!.getDouble('crossfadeSeconds') ?? 8;
-    volume = _prefs!.getDouble('volume') ?? 1;
-    preampDb = _prefs!.getDouble('preampDb') ?? -1.0;
-    bassDb = _prefs!.getDouble('bassDb') ?? 0;
-    trebleDb = _prefs!.getDouble('trebleDb') ?? 0;
+    final storedVolume = _prefs!.getDouble('volume');
+    volume = clampFinite(storedVolume ?? 1.0, 0.0, 1.0, fallback: 1.0);
+    if (storedVolume == null || volume != storedVolume) {
+      await _prefs!.setDouble('volume', volume);
+    }
+    final storedPreampDb = _prefs!.getDouble('preampDb');
+    preampDb = clampFinite(storedPreampDb ?? -1.0, -12.0, 6.0, fallback: -1.0);
+    if (storedPreampDb == null || preampDb != storedPreampDb) {
+      await _prefs!.setDouble('preampDb', preampDb);
+    }
+    final storedBassDb = _prefs!.getDouble('bassDb');
+    bassDb = clampFinite(storedBassDb ?? 0.0, -12.0, 12.0);
+    if (storedBassDb == null || bassDb != storedBassDb) {
+      await _prefs!.setDouble('bassDb', bassDb);
+    }
+    final storedTrebleDb = _prefs!.getDouble('trebleDb');
+    trebleDb = clampFinite(storedTrebleDb ?? 0.0, -12.0, 12.0);
+    if (storedTrebleDb == null || trebleDb != storedTrebleDb) {
+      await _prefs!.setDouble('trebleDb', trebleDb);
+    }
 
     library = (await repository.loadCached())
         .where((track) => _isUnderAnyRoot(track.path))
@@ -157,19 +173,15 @@ class AppState extends ChangeNotifier {
     _playingSub = player.playingStream.listen((playing) {
       _safeNotify();
       _publishMediaState();
-      if ((!playing ||
-              defaultTargetPlatform != TargetPlatform.android) &&
+      if ((!playing || defaultTargetPlatform != TargetPlatform.android) &&
           autoAnalyze) {
         unawaited(_autoAnalyzeWindow());
       }
     });
-    _mixTimer = Timer.periodic(
-      const Duration(milliseconds: 250),
-      (_) {
-        _checkAutoMix();
-        _mediaTick();
-      },
-    );
+    _mixTimer = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      _checkAutoMix();
+      _mediaTick();
+    });
     await player.setVolume(volume);
     await player.setPreamp(preampDb);
     await player.setBaseEq(bass: bassDb, treble: trebleDb);
@@ -189,8 +201,7 @@ class AppState extends ChangeNotifier {
       Timer(const Duration(seconds: 6), () async {
         var track = current;
         if (track?.analysis == null) {
-          final analyzed =
-              library.where((t) => t.analysis != null).toList();
+          final analyzed = library.where((t) => t.analysis != null).toList();
           if (analyzed.isNotEmpty) {
             track = analyzed.first;
             await playTrack(track, context: library);
@@ -209,9 +220,7 @@ class AppState extends ChangeNotifier {
           '(end=${analysis.audibleEnd}, fade=${fade.toStringAsFixed(2)}, '
           'bpm=${analysis.bpm}, mixIn=${analysis.mixIn})',
         );
-        await player.seek(
-          Duration(milliseconds: (target * 1000).round()),
-        );
+        await player.seek(Duration(milliseconds: (target * 1000).round()));
       });
       Timer(const Duration(seconds: 22), () {
         logLine(
@@ -296,6 +305,7 @@ class AppState extends ChangeNotifier {
       await player.load(
         track.path,
         gain: _gainFor(track),
+        peakDb: track.analysis?.peakDb,
         startAt: _startOffsetFor(track),
       );
       _publishMediaState();
@@ -423,47 +433,40 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> setVolume(double value) async {
-    volume = value.clamp(0, 1);
+    volume = clampFinite(value, 0.0, 1.0, fallback: 0.0);
     await player.setVolume(volume);
     _prefs?.setDouble('volume', volume);
     _safeNotify();
   }
 
   void setPreamp(double value) {
-    preampDb = value.clamp(-12, 6);
+    preampDb = clampFinite(value, -12.0, 6.0);
     _prefs?.setDouble('preampDb', preampDb);
     player.setPreamp(preampDb);
     _safeNotify();
   }
 
   void setBass(double value) {
-    bassDb = value.clamp(-12, 12);
+    bassDb = clampFinite(value, -12.0, 12.0);
     _prefs?.setDouble('bassDb', bassDb);
     player.setBaseEq(bass: bassDb, treble: trebleDb);
     _safeNotify();
   }
 
   void setTreble(double value) {
-    trebleDb = value.clamp(-12, 12);
+    trebleDb = clampFinite(value, -12.0, 12.0);
     _prefs?.setDouble('trebleDb', trebleDb);
     player.setBaseEq(bass: bassDb, treble: trebleDb);
     _safeNotify();
   }
 
   double _gainFor(Track? track) {
-    if (!normalize) return 1;
     final analysis = track?.analysis;
-    if (analysis == null) return 1;
-    final lufs = analysis.lufs;
-    if (lufs == null) return 1;
-
-    var gain = math.pow(10, (-11.0 - lufs) / 20).toDouble();
-    final peak = analysis.peakDb;
-    if (peak != null) {
-      final maxGain = math.pow(10, (-0.3 - peak) / 20).toDouble();
-      if (gain > maxGain) gain = maxGain;
-    }
-    return gain.clamp(0.25, 2.0);
+    return trackGainFor(
+      normalize: normalize,
+      lufs: analysis?.lufs,
+      peakDb: analysis?.peakDb,
+    );
   }
 
   double _fadeSecondsFor(Track track) {
@@ -526,13 +529,11 @@ class AppState extends ChangeNotifier {
     var seconds = _fadeSecondsFor(outTrack);
     final outAnalysis = outTrack.analysis;
     final inAnalysis = inTrack.analysis;
-    final bar = (outAnalysis != null &&
-            outAnalysis.normalizedBarLength > 0.2)
+    final bar = (outAnalysis != null && outAnalysis.normalizedBarLength > 0.2)
         ? outAnalysis.normalizedBarLength
         : 2.0;
     final style = _styleFor(outTrack);
-    if (style == _TransitionStyle.dance ||
-        style == _TransitionStyle.latin) {
+    if (style == _TransitionStyle.dance || style == _TransitionStyle.latin) {
       seconds = math.max(seconds, 8 * bar);
     } else if (style == _TransitionStyle.hipHop) {
       seconds = math.min(seconds, 4 * bar);
@@ -541,8 +542,8 @@ class AppState extends ChangeNotifier {
     }
 
     if (outAnalysis != null && inAnalysis != null) {
-      final ratio = (outAnalysis.normalizedBpm > 0 &&
-              inAnalysis.normalizedBpm > 0)
+      final ratio =
+          (outAnalysis.normalizedBpm > 0 && inAnalysis.normalizedBpm > 0)
           ? outAnalysis.normalizedBpm / inAnalysis.normalizedBpm
           : 1.0;
       if ((ratio - 1).abs() > 0.08) {
@@ -564,9 +565,7 @@ class AppState extends ChangeNotifier {
     if (!skipSilence || _advancing || !player.playing) return;
     final analysis = current?.analysis;
     if (analysis == null || analysis.audibleEnd <= 0) return;
-    final end = Duration(
-      milliseconds: (analysis.audibleEnd * 1000).round(),
-    );
+    final end = Duration(milliseconds: (analysis.audibleEnd * 1000).round());
     if (player.position < end - const Duration(milliseconds: 200)) return;
     _advancing = true;
     unawaited(next().whenComplete(() => _advancing = false));
@@ -621,7 +620,13 @@ class AppState extends ChangeNotifier {
           preloadRate = ratio.clamp(0.92, 1.08).toDouble();
         }
       }
-      unawaited(player.prepareIncoming(nextTrack.path, rate: preloadRate));
+      unawaited(
+        player.prepareIncoming(
+          nextTrack.path,
+          rate: preloadRate,
+          peakDb: nextTrack.analysis?.peakDb,
+        ),
+      );
       _preloadedIndex = nextIndex;
     }
     if (remaining > window || remaining <= const Duration(milliseconds: 120)) {
@@ -662,8 +667,8 @@ class AppState extends ChangeNotifier {
     final outAnalysis = outTrack.analysis;
     final inAnalysis = inTrack.analysis;
     if (outAnalysis != null && inAnalysis != null) {
-      final ratio = (outAnalysis.normalizedBpm > 0 &&
-              inAnalysis.normalizedBpm > 0)
+      final ratio =
+          (outAnalysis.normalizedBpm > 0 && inAnalysis.normalizedBpm > 0)
           ? outAnalysis.normalizedBpm / inAnalysis.normalizedBpm
           : 1.0;
       if ((ratio - 1).abs() <= 0.08) {
@@ -727,6 +732,7 @@ class AppState extends ChangeNotifier {
         incomingRate: targetRate,
         incomingStart: incomingStart,
         incomingGain: _gainFor(inTrack),
+        incomingPeakDb: inTrack.analysis?.peakDb,
         bassSwap: true,
         eqIntensity: eqIntensity,
       );
@@ -839,8 +845,7 @@ class AppState extends ChangeNotifier {
     final fa = a.analysis?.features;
     final fb = b.analysis?.features;
     if (fa == null || fb == null) return null;
-    if (fa.length != stats.means.length ||
-        fb.length != stats.means.length) {
+    if (fa.length != stats.means.length || fb.length != stats.means.length) {
       return null;
     }
     var dot = 0.0;
@@ -924,8 +929,7 @@ class AppState extends ChangeNotifier {
 
     for (final track in pending) {
       if (_disposed) break;
-      if (defaultTargetPlatform == TargetPlatform.android &&
-          player.playing) {
+      if (defaultTargetPlatform == TargetPlatform.android && player.playing) {
         break;
       }
       analysisCurrent = track.title;
@@ -940,12 +944,17 @@ class AppState extends ChangeNotifier {
         final analysis = TrackAnalysis.fromJson(data);
         final libraryIndex = library.indexWhere((t) => t.id == track.id);
         if (libraryIndex >= 0) {
-          library[libraryIndex] =
-              library[libraryIndex].withAnalysis(analysis);
+          library[libraryIndex] = library[libraryIndex].withAnalysis(analysis);
         }
         final queueIndex = queue.indexWhere((t) => t.id == track.id);
         if (queueIndex >= 0) {
           queue[queueIndex] = queue[queueIndex].withAnalysis(analysis);
+          if (queueIndex == index) {
+            await player.setTrackGain(
+              _gainFor(queue[queueIndex]),
+              peakDb: queue[queueIndex].analysis?.peakDb,
+            );
+          }
         }
         logLine(
           'analysis done: ${track.path} '
@@ -972,10 +981,10 @@ class AppState extends ChangeNotifier {
     final pending = force
         ? List<Track>.of(library)
         : library
-            .where(
-              (t) => t.analysis == null && !_analysisFailed.contains(t.id),
-            )
-            .toList();
+              .where(
+                (t) => t.analysis == null && !_analysisFailed.contains(t.id),
+              )
+              .toList();
     await _analyzeTracks(pending);
   }
 
@@ -998,8 +1007,7 @@ class AppState extends ChangeNotifier {
     _safeNotify();
   }
 
-  int get analysisPending =>
-      library.where((t) => t.analysis == null).length;
+  int get analysisPending => library.where((t) => t.analysis == null).length;
 
   static bool _isUnderRoot(String path, String root) {
     final normalizedPath = path.replaceAll('\\', '/').toLowerCase();
@@ -1058,9 +1066,9 @@ class AppState extends ChangeNotifier {
     }
 
     List<double> normalize(List<double> features) => [
-          for (var i = 0; i < dimensions; i++)
-            (features[i] - means[i]) / deviations[i]
-        ];
+      for (var i = 0; i < dimensions; i++)
+        (features[i] - means[i]) / deviations[i],
+    ];
 
     final currentVector = normalize(currentFeatures);
     final currentNorm = _vectorNorm(currentVector);
@@ -1077,10 +1085,7 @@ class AppState extends ChangeNotifier {
         final similarity =
             _dotProduct(currentVector, vector) / (currentNorm * vectorNorm);
         scored.add(
-          _ScoredTrack(
-            track,
-            similarity + _random.nextDouble() * 0.06,
-          ),
+          _ScoredTrack(track, similarity + _random.nextDouble() * 0.06),
         );
       }
       scored.sort((a, b) => b.score.compareTo(a.score));
@@ -1154,9 +1159,16 @@ class AppState extends ChangeNotifier {
     _safeNotify();
   }
 
-  void setNormalize(bool value) {
+  Future<void> setNormalize(bool value) async {
     normalize = value;
     _prefs?.setBool('normalize', value);
+    final track = current;
+    if (track != null) {
+      await player.setTrackGain(
+        _gainFor(track),
+        peakDb: track.analysis?.peakDb,
+      );
+    }
     _safeNotify();
   }
 
@@ -1198,8 +1210,9 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> removeRoot(String root) async {
-    musicRoots =
-        musicRoots.where((existing) => !_samePath(existing, root)).toList();
+    musicRoots = musicRoots
+        .where((existing) => !_samePath(existing, root))
+        .toList();
     await _prefs?.setStringList('musicRoots', musicRoots);
     _safeNotify();
     await rescan();
@@ -1293,8 +1306,7 @@ class AppState extends ChangeNotifier {
     return ok;
   }
 
-  Future<void> openNotificationSettings() =>
-      _mediaNotification.openSettings();
+  Future<void> openNotificationSettings() => _mediaNotification.openSettings();
 
   bool get notificationReady =>
       notificationPermission &&
@@ -1343,5 +1355,3 @@ class _ScoredTrack {
 }
 
 enum _TransitionStyle { smooth, dance, hipHop, latin, pop, ballad }
-
-

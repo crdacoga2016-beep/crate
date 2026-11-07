@@ -3,6 +3,8 @@ import 'dart:math' as math;
 
 import 'package:media_kit/media_kit.dart';
 
+import '../util/eq_graph.dart';
+import '../util/gain_calculation.dart';
 import '../util/log.dart';
 
 class _Deck {
@@ -11,11 +13,17 @@ class _Deck {
   final Player player;
   String? path;
   double gain = 1;
+  double? peakDb;
+  double baseBass = 0;
+  double baseTreble = 0;
+  double transitionBassCut = 0;
+  double transitionHighCut = 0;
+  double transitionIntensity = 0.6;
 
-  Future<void> open(String path, {double volume = 0}) async {
+  Future<void> open(String path, {double linearGain = 0}) async {
     this.path = path;
     await player.open(Media(Uri.file(path).toString()), play: false);
-    await player.setVolume(volume);
+    await player.setVolume(mpvVolumeForLinearGain(linearGain));
     await player.setRate(1);
   }
 
@@ -45,9 +53,10 @@ class PlayerService {
   Timer? _rateTimer;
   String? _preparedPath;
   double _preparedRate = 1;
-  double _preampGain = 1;
+  double _preampDb = 0;
   double _baseBass = 0;
   double _baseTreble = 0;
+  Completer<void>? _fadeCompleter;
 
   final StreamController<Duration> _positionCtrl =
       StreamController<Duration>.broadcast();
@@ -113,20 +122,24 @@ class PlayerService {
     bool autoPlay = true,
     double rate = 1,
     double gain = 1,
+    double? peakDb,
     Duration startAt = Duration.zero,
   }) async {
     await _cancelTransitions();
     await _incoming.stop();
     _preparedPath = null;
     _bindActive();
-    await _setEq(_a);
-    await _applyBaseEq(_a);
-    _a.gain = gain;
+    _a.baseBass = _baseBass;
+    _a.baseTreble = _baseTreble;
+    await _applyEq(_a);
+    _a.gain = clampFinite(gain, 0.0, maximumMpvLinearGain, fallback: 1.0);
+    _a.peakDb = peakDb;
+    await _configureMpv(_a);
     logLine(
-      'deck load: $path (rate $rate, gain ${gain.toStringAsFixed(2)}, '
-      'start ${startAt.inMilliseconds}ms)',
+      'deck load: $path (rate $rate, gain ${_a.gain.toStringAsFixed(2)}, '
+      'peakDb=$peakDb, start ${startAt.inMilliseconds}ms)',
     );
-    await _a.open(path, volume: _userVolume * gain * _preampGain * 100);
+    await _a.open(path, linearGain: _deckLinearGain(_a));
     await _a.player.setRate(rate);
     if (autoPlay) await _a.player.play();
     if (startAt > Duration.zero && await _waitReady(_a)) {
@@ -143,11 +156,20 @@ class PlayerService {
     return false;
   }
 
-  Future<void> prepareIncoming(String path, {double rate = 1}) async {
+  Future<void> prepareIncoming(
+    String path, {
+    double rate = 1,
+    double? peakDb,
+  }) async {
     if (_fadeTimer != null || _preparedPath == path) return;
     await _incoming.stop();
     _preparedPath = null;
-    await _incoming.open(path, volume: 0);
+    _incoming.baseBass = _baseBass;
+    _incoming.baseTreble = _baseTreble;
+    await _applyEq(_incoming);
+    _incoming.peakDb = peakDb;
+    await _configureMpv(_incoming);
+    await _incoming.open(path, linearGain: 0);
     await _incoming.player.setRate(rate);
     await _waitReady(_incoming);
     _preparedPath = path;
@@ -165,50 +187,89 @@ class PlayerService {
   Future<void> seek(Duration position) => _a.player.seek(position);
 
   Future<void> setVolume(double volume) async {
-    _userVolume = volume.clamp(0, 1);
+    _userVolume = clampFinite(volume, 0.0, 1.0, fallback: 0.0);
     if (_fadeTimer != null) return;
-    await _a.player.setVolume(_userVolume * _a.gain * _preampGain * 100);
+    await _applyDeckVolume(_a);
   }
 
   Future<void> setPreamp(double db) async {
-    _preampGain = math.pow(10, db / 20).toDouble();
+    _preampDb = clampFinite(db, -12.0, 6.0);
     if (_fadeTimer == null) {
-      await _a.player.setVolume(
-        _userVolume * _a.gain * _preampGain * 100,
-      );
+      await _applyDeckVolume(_a);
     }
   }
 
-  Future<void> setBaseEq({
-    required double bass,
-    required double treble,
-  }) async {
-    _baseBass = bass;
-    _baseTreble = treble;
-    if (_fadeTimer != null) return;
-    await _applyBaseEq(_a);
+  Future<void> setTrackGain(double gain, {double? peakDb}) async {
+    _a.gain = clampFinite(gain, 0.0, maximumMpvLinearGain, fallback: 1.0);
+    _a.peakDb = peakDb;
+    if (_fadeTimer == null) {
+      await _applyDeckVolume(_a);
+    }
   }
 
-  Future<void> _applyBaseEq(_Deck deck) async {
-    if (_baseBass.abs() < 0.1 && _baseTreble.abs() < 0.1) {
-      await _setFilter(deck, '');
-      return;
+  Future<void> setBaseEq({required double bass, required double treble}) async {
+    _baseBass = clampFinite(bass, -12.0, 12.0);
+    _baseTreble = clampFinite(treble, -12.0, 12.0);
+    for (final deck in _decks) {
+      deck.baseBass = _baseBass;
+      deck.baseTreble = _baseTreble;
+      await _applyEq(deck);
     }
-    final filters = <String>[];
-    if (_baseBass.abs() >= 0.1) {
-      filters.add(
-        'equalizer=f=80:t=q:w=1:g=${_baseBass.toStringAsFixed(1)}',
-      );
+    if (_fadeTimer == null) {
+      await _applyDeckVolume(_a);
     }
-    if (_baseTreble.abs() >= 0.1) {
-      filters.add(
-        'equalizer=f=10000:t=q:w=1:g=${_baseTreble.toStringAsFixed(1)}',
-      );
-    }
-    await _setFilter(
-      deck,
-      'format=s16,lavfi=[${filters.join(',')}]',
+  }
+
+  Future<void> _applyEq(_Deck deck) async {
+    final settings = EqSettings(
+      bassDb: deck.baseBass,
+      trebleDb: deck.baseTreble,
+      transitionBassCut: deck.transitionBassCut,
+      transitionHighCut: deck.transitionHighCut,
+      transitionIntensity: deck.transitionIntensity,
     );
+    await _setFilter(deck, buildEqFilter(settings));
+  }
+
+  double _eqHeadroomGainFor(_Deck deck) {
+    final maximumBoost = math.max(deck.baseBass, deck.baseTreble);
+    if (maximumBoost <= 0.0) return 1.0;
+    return dbToLinearGain(-maximumBoost);
+  }
+
+  double _deckLinearGain(_Deck deck, {double fadeGain = 1.0}) {
+    var linearGain = combinedLinearGain(
+      userVolume: _userVolume,
+      trackGain: deck.gain,
+      preampDb: _preampDb,
+      fadeGain: fadeGain,
+      eqHeadroomGain: _eqHeadroomGainFor(deck),
+    );
+    final peakDb = deck.peakDb;
+    if (peakDb != null && peakDb.isFinite) {
+      final ceilingGain = dbToLinearGain(peakCeilingDb - peakDb);
+      if (linearGain > ceilingGain) linearGain = ceilingGain;
+    }
+    return linearGain;
+  }
+
+  Future<void> _applyDeckVolume(_Deck deck, {double fadeGain = 1.0}) async {
+    await deck.player.setVolume(
+      mpvVolumeForLinearGain(_deckLinearGain(deck, fadeGain: fadeGain)),
+    );
+  }
+
+  Future<void> _configureMpv(_Deck deck) async {
+    try {
+      final platform = deck.player.platform;
+      if (platform == null) {
+        logLine('audio property error: volume-max platform unavailable');
+        return;
+      }
+      await (platform as dynamic).setProperty('volume-max', '1000');
+    } catch (error) {
+      logLine('audio property error: volume-max error=$error');
+    }
   }
 
   Future<void> stop() async {
@@ -224,22 +285,31 @@ class PlayerService {
     double incomingRate = 1,
     Duration incomingStart = Duration.zero,
     double incomingGain = 1,
+    double? incomingPeakDb,
     bool bassSwap = false,
     double eqIntensity = 0.6,
   }) async {
-    if (_fadeTimer != null) return;
+    if (_fadeTimer != null) {
+      return _fadeCompleter?.future ?? Future<void>.value();
+    }
 
     final outgoing = _a;
     final incoming = _incoming;
 
-    _active = 1 - _active;
-    _bindActive();
-
     final prepared = _preparedPath == nextPath;
-    incoming.gain = incomingGain;
+    incoming.baseBass = _baseBass;
+    incoming.baseTreble = _baseTreble;
+    incoming.gain = clampFinite(
+      incomingGain,
+      0.0,
+      maximumMpvLinearGain,
+      fallback: 1.0,
+    );
+    incoming.peakDb = incomingPeakDb;
     logLine('deck crossfade -> $nextPath (rate $incomingRate)');
     if (!prepared) {
-      await incoming.open(nextPath, volume: 0);
+      await _configureMpv(incoming);
+      await incoming.open(nextPath, linearGain: 0);
       await incoming.player.setRate(incomingRate);
     } else {
       await incoming.player.setVolume(0);
@@ -247,10 +317,12 @@ class PlayerService {
         await incoming.player.setRate(incomingRate);
       }
     }
-    if (bassSwap) {
-      await _setEq(outgoing, bassCut: true, intensity: eqIntensity);
-      await _setEq(incoming, highCut: true, intensity: eqIntensity);
-    }
+    _active = 1 - _active;
+    _bindActive();
+    outgoing.baseBass = _baseBass;
+    outgoing.baseTreble = _baseTreble;
+    await _setTransitionEq(outgoing, bassCut: bassSwap, intensity: eqIntensity);
+    await _setTransitionEq(incoming, highCut: bassSwap, intensity: eqIntensity);
     await incoming.player.play();
     if (incomingStart > Duration.zero) {
       if (prepared) {
@@ -265,24 +337,24 @@ class PlayerService {
     final steps = math.max(1, (totalMs / 40).ceil());
     var step = 0;
     var bassSwapped = false;
+    final completer = _fadeCompleter = Completer<void>();
 
-    _fadeTimer = Timer.periodic(const Duration(milliseconds: 40), (timer) async {
+    _fadeTimer = Timer.periodic(const Duration(milliseconds: 40), (
+      timer,
+    ) async {
       step++;
       final x = (step / steps).clamp(0.0, 1.0);
-      final inGain = math.sin(x * math.pi / 2);
-      final outGain = math.cos(x * math.pi / 2);
+      final gains = equalPowerCrossfadeGains(x);
+      final inGain = gains.incoming;
+      final outGain = gains.outgoing;
 
-      await incoming.player.setVolume(
-        inGain * _userVolume * incoming.gain * _preampGain * 100,
-      );
-      await outgoing.player.setVolume(
-        outGain * _userVolume * outgoing.gain * _preampGain * 100,
-      );
+      await _applyDeckVolume(incoming, fadeGain: inGain);
+      await _applyDeckVolume(outgoing, fadeGain: outGain);
 
       if (bassSwap && !bassSwapped && x >= 0.5) {
         bassSwapped = true;
-        await _setEq(incoming);
-        await _setEq(
+        await _clearTransition(incoming);
+        await _setTransitionEq(
           outgoing,
           bassCut: true,
           highCut: true,
@@ -294,60 +366,51 @@ class PlayerService {
         timer.cancel();
         _fadeTimer = null;
         await outgoing.stop();
-        await outgoing.player.setVolume(
-          _userVolume * outgoing.gain * _preampGain * 100,
-        );
-        await incoming.player.setVolume(
-          _userVolume * incoming.gain * _preampGain * 100,
-        );
-        await _applyBaseEq(incoming);
-        await _setEq(outgoing);
+        await _clearTransition(incoming);
+        await _clearTransition(outgoing);
+        await _applyDeckVolume(incoming);
+        if (identical(_fadeCompleter, completer)) _fadeCompleter = null;
+        if (!completer.isCompleted) completer.complete();
       }
     });
+
+    return completer.future;
   }
 
-  Future<void> _setEq(
+  Future<void> _setTransitionEq(
     _Deck deck, {
     bool bassCut = false,
     bool highCut = false,
     double intensity = 0.6,
   }) async {
-    if (!bassCut && !highCut) {
-      await _setFilter(deck, '');
-      return;
-    }
+    deck.transitionBassCut = bassCut ? 1.0 : 0.0;
+    deck.transitionHighCut = highCut ? 1.0 : 0.0;
+    deck.transitionIntensity = clampFinite(intensity, 0.0, 1.0, fallback: 0.6);
+    await _applyEq(deck);
+  }
 
-    final strength = intensity.clamp(0.0, 1.0);
-    final filters = <String>[];
-    if (bassCut) {
-      filters.add(
-        'equalizer=f=60:t=q:w=1:g=${(-20.0 * strength).toStringAsFixed(1)}',
-      );
-      filters.add(
-        'equalizer=f=120:t=q:w=1:g=${(-18.0 * strength).toStringAsFixed(1)}',
-      );
-    }
-    if (highCut) {
-      filters.add(
-        'equalizer=f=7000:t=q:w=1:g=${(-16.0 * strength).toStringAsFixed(1)}',
-      );
-      filters.add(
-        'equalizer=f=11000:t=q:w=1:g=${(-18.0 * strength).toStringAsFixed(1)}',
-      );
-    }
-
-    await _setFilter(
-      deck,
-      'format=s16,lavfi=[${filters.join(',')}]',
-    );
+  Future<void> _clearTransition(_Deck deck) async {
+    deck.transitionBassCut = 0.0;
+    deck.transitionHighCut = 0.0;
+    await _applyEq(deck);
   }
 
   Future<void> _setFilter(_Deck deck, String filter) async {
     try {
       final platform = deck.player.platform;
-      if (platform == null) return;
+      if (platform == null) {
+        logLine(
+          'audio filter error: path=${deck.path} filter=$filter '
+          'error=player platform unavailable',
+        );
+        return;
+      }
       await (platform as dynamic).setProperty('af', filter);
-    } catch (_) {}
+    } catch (error) {
+      logLine(
+        'audio filter error: path=${deck.path} filter=$filter error=$error',
+      );
+    }
   }
 
   void rampRateTo(double target, Duration duration) {
@@ -355,7 +418,9 @@ class PlayerService {
     final steps = math.max(1, (duration.inMilliseconds / 50).ceil());
     final start = _a.player.state.rate;
     var step = 0;
-    _rateTimer = Timer.periodic(const Duration(milliseconds: 50), (timer) async {
+    _rateTimer = Timer.periodic(const Duration(milliseconds: 50), (
+      timer,
+    ) async {
       step++;
       final x = (step / steps).clamp(0.0, 1.0);
       final value = start + (target - start) * x;
@@ -367,6 +432,11 @@ class PlayerService {
   Future<void> _cancelTransitions() async {
     _fadeTimer?.cancel();
     _fadeTimer = null;
+    final completer = _fadeCompleter;
+    _fadeCompleter = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.completeError(StateError('crossfade cancelled'));
+    }
     _rateTimer?.cancel();
     _rateTimer = null;
   }
