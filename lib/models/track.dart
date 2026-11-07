@@ -1,3 +1,4 @@
+import 'replay_gain.dart';
 import 'track_analysis.dart';
 
 class Track {
@@ -14,6 +15,7 @@ class Track {
   final Duration? duration;
   final String? artworkPath;
   final double? bpm;
+  final ReplayGainData? replayGain;
   final TrackAnalysis? analysis;
 
   const Track({
@@ -30,6 +32,7 @@ class Track {
     this.duration,
     this.artworkPath,
     this.bpm,
+    this.replayGain,
     this.analysis,
   });
 
@@ -48,27 +51,40 @@ class Track {
       duration: duration,
       artworkPath: artworkPath,
       bpm: value?.bpm ?? bpm,
+      replayGain: replayGain,
       analysis: value,
     );
+  }
+
+  double? get effectivePeakDb {
+    double? effectivePeakDb = analysis?.peakDb;
+    final replayPeakDb = replayGain?.effectiveTrackPeakDb;
+    if (replayPeakDb != null &&
+        replayPeakDb.isFinite &&
+        (effectivePeakDb == null || replayPeakDb > effectivePeakDb)) {
+      effectivePeakDb = replayPeakDb;
+    }
+    return effectivePeakDb;
   }
 
   String get subtitle => artist;
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'path': path,
-        'title': title,
-        'artist': artist,
-        'album': album,
-        'albumArtist': albumArtist,
-        'genre': genre,
-        'year': year,
-        'trackNumber': trackNumber,
-        'discNumber': discNumber,
-        'duration': duration?.inSeconds,
-        'artworkPath': artworkPath,
-        'bpm': bpm,
-      };
+    'id': id,
+    'path': path,
+    'title': title,
+    'artist': artist,
+    'album': album,
+    'albumArtist': albumArtist,
+    'genre': genre,
+    'year': year,
+    'trackNumber': trackNumber,
+    'discNumber': discNumber,
+    'duration': duration?.inSeconds,
+    'artworkPath': artworkPath,
+    'bpm': bpm,
+    'replayGain': replayGain?.toJson(),
+  };
 
   factory Track.fromJson(Map<String, dynamic> json) {
     final seconds = json['duration'];
@@ -86,7 +102,20 @@ class Track {
       duration: seconds is int ? Duration(seconds: seconds) : null,
       artworkPath: json['artworkPath'] as String?,
       bpm: (json['bpm'] as num?)?.toDouble(),
+      replayGain: _replayGainFromJson(json['replayGain']),
     );
+  }
+
+  static ReplayGainData? _replayGainFromJson(Object? value) {
+    if (value is Map<String, dynamic>) {
+      return ReplayGainData.fromJson(value);
+    }
+    if (value is Map) {
+      return ReplayGainData.fromJson(
+        value.map((key, entry) => MapEntry(key.toString(), entry)),
+      );
+    }
+    return null;
   }
 
   @override

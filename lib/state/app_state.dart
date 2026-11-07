@@ -37,6 +37,7 @@ class AppState extends ChangeNotifier {
   bool crossfade = true;
   bool gapless = true;
   bool normalize = true;
+  bool useReplayGain = true;
   bool skipSilence = true;
   bool smartShuffle = false;
   bool autoAnalyze = true;
@@ -138,6 +139,7 @@ class AppState extends ChangeNotifier {
     crossfade = _prefs!.getBool('crossfade') ?? true;
     gapless = _prefs!.getBool('gapless') ?? true;
     normalize = _prefs!.getBool('normalize') ?? true;
+    useReplayGain = _prefs!.getBool('useReplayGain') ?? true;
     skipSilence = _prefs!.getBool('skipSilence') ?? true;
     smartShuffle = _prefs!.getBool('smartShuffle') ?? false;
     autoAnalyze = _prefs!.getBool('autoAnalyze') ?? true;
@@ -311,7 +313,7 @@ class AppState extends ChangeNotifier {
       await player.load(
         track.path,
         gain: _gainFor(track),
-        peakDb: track.analysis?.peakDb,
+        peakDb: _peakDbFor(track),
         startAt: _startOffsetFor(track),
       );
       _publishMediaState();
@@ -543,11 +545,27 @@ class AppState extends ChangeNotifier {
 
   double _gainFor(Track? track) {
     final analysis = track?.analysis;
+    final replayGain = useReplayGain ? track?.replayGain : null;
     return trackGainFor(
       normalize: normalize,
       lufs: analysis?.lufs,
       peakDb: analysis?.peakDb,
+      replayGainDb: replayGain?.effectiveTrackGainDb,
+      replayGainPeakDb: replayGain?.effectiveTrackPeakDb,
     );
+  }
+
+  double? _peakDbFor(Track track) {
+    var peakDb = track.analysis?.peakDb;
+    final replayPeakDb = useReplayGain
+        ? track.replayGain?.effectiveTrackPeakDb
+        : null;
+    if (replayPeakDb != null &&
+        replayPeakDb.isFinite &&
+        (peakDb == null || replayPeakDb > peakDb)) {
+      peakDb = replayPeakDb;
+    }
+    return peakDb;
   }
 
   double _fadeSecondsFor(Track track) {
@@ -705,7 +723,7 @@ class AppState extends ChangeNotifier {
         player.prepareIncoming(
           nextTrack.path,
           rate: preloadRate,
-          peakDb: nextTrack.analysis?.peakDb,
+          peakDb: _peakDbFor(nextTrack),
         ),
       );
       _preloadedIndex = nextIndex;
@@ -813,7 +831,7 @@ class AppState extends ChangeNotifier {
         incomingRate: targetRate,
         incomingStart: incomingStart,
         incomingGain: _gainFor(inTrack),
-        incomingPeakDb: inTrack.analysis?.peakDb,
+        incomingPeakDb: _peakDbFor(inTrack),
         bassSwap: true,
         eqIntensity: eqIntensity,
       );
@@ -1033,7 +1051,7 @@ class AppState extends ChangeNotifier {
           if (queueIndex == index) {
             await player.setTrackGain(
               _gainFor(queue[queueIndex]),
-              peakDb: queue[queueIndex].analysis?.peakDb,
+              peakDb: _peakDbFor(queue[queueIndex]),
             );
           }
         }
@@ -1245,10 +1263,17 @@ class AppState extends ChangeNotifier {
     _prefs?.setBool('normalize', value);
     final track = current;
     if (track != null) {
-      await player.setTrackGain(
-        _gainFor(track),
-        peakDb: track.analysis?.peakDb,
-      );
+      await player.setTrackGain(_gainFor(track), peakDb: _peakDbFor(track));
+    }
+    _safeNotify();
+  }
+
+  Future<void> setUseReplayGain(bool value) async {
+    useReplayGain = value;
+    _prefs?.setBool('useReplayGain', value);
+    final track = current;
+    if (track != null) {
+      await player.setTrackGain(_gainFor(track), peakDb: _peakDbFor(track));
     }
     _safeNotify();
   }

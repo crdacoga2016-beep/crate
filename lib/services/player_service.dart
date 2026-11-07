@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:media_kit/media_kit.dart';
 
 import '../util/eq_graph.dart';
@@ -55,6 +56,7 @@ class PlayerService {
   double _preparedRate = 1;
   double _preampDb = 0;
   EqState _currentEq = EqState.flat;
+  bool _shelfFiltersUnavailable = false;
   Completer<void>? _fadeCompleter;
 
   final StreamController<Duration> _positionCtrl =
@@ -219,14 +221,29 @@ class PlayerService {
     }
   }
 
+  bool get _preferShelfFilters {
+    if (_shelfFiltersUnavailable) return false;
+    return defaultTargetPlatform != TargetPlatform.android;
+  }
+
   Future<void> _applyEq(_Deck deck) async {
-    final settings = EqSettings(
+    var settings = EqSettings(
       baseEq: deck.eq,
       transitionBassCut: deck.transitionBassCut,
       transitionHighCut: deck.transitionHighCut,
       transitionIntensity: deck.transitionIntensity,
+      useShelves: _preferShelfFilters,
     );
-    await _setFilter(deck, buildEqFilter(settings));
+    var applied = await _setFilter(deck, buildEqFilter(settings));
+    if (!applied && settings.useShelves) {
+      _shelfFiltersUnavailable = true;
+      settings = settings.copyWith(useShelves: false);
+      logLine(
+        'audio filter fallback: shelf filters unavailable; '
+        'using peaking equalizer',
+      );
+      await _setFilter(deck, buildEqFilter(settings));
+    }
   }
 
   double _eqHeadroomGainFor(_Deck deck) => deck.eq.smartHeadroomGain;
@@ -388,7 +405,7 @@ class PlayerService {
     await _applyEq(deck);
   }
 
-  Future<void> _setFilter(_Deck deck, String filter) async {
+  Future<bool> _setFilter(_Deck deck, String filter) async {
     try {
       final platform = deck.player.platform;
       if (platform == null) {
@@ -396,13 +413,15 @@ class PlayerService {
           'audio filter error: path=${deck.path} filter=$filter '
           'error=player platform unavailable',
         );
-        return;
+        return false;
       }
       await (platform as dynamic).setProperty('af', filter);
+      return true;
     } catch (error) {
       logLine(
         'audio filter error: path=${deck.path} filter=$filter error=$error',
       );
+      return false;
     }
   }
 

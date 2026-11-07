@@ -331,6 +331,15 @@ class SettingsScreen extends StatelessWidget {
               title: 'Sonido',
               children: [
                 EqWidget(state: state),
+                SwitchListTile(
+                  value: state.useReplayGain,
+                  onChanged: state.setUseReplayGain,
+                  secondary: const Icon(Icons.graphic_eq_rounded),
+                  title: const Text('Usar ReplayGain si está disponible'),
+                  subtitle: const Text(
+                    'Etiquetas de ganancia y pico por pista o álbum',
+                  ),
+                ),
                 ListTile(
                   leading: const Icon(Icons.bolt_rounded),
                   title: const Text('Preamp'),

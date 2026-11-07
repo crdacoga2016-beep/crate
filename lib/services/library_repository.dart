@@ -6,12 +6,14 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+import '../models/replay_gain.dart';
 import '../models/track.dart';
 import '../models/track_analysis.dart';
 
 typedef ScanProgress = void Function(int done, int total, String current);
 
 class LibraryRepository {
+  static const int libraryCacheVersion = 2;
   static const Set<String> audioExtensions = {
     '.mp3',
     '.flac',
@@ -164,18 +166,10 @@ class LibraryRepository {
     return dot > 0 ? lower.substring(0, dot) : lower;
   }
 
-  Future<void> saveAnalysis(
-    String path,
-    Map<String, dynamic> data,
-  ) async {
+  Future<void> saveAnalysis(String path, Map<String, dynamic> data) async {
     try {
-      final file = File(
-        p.join((await _supportDir()).path, 'analysis.json'),
-      );
-      Map<String, dynamic> root = {
-        'version': 1,
-        'tracks': <String, dynamic>{},
-      };
+      final file = File(p.join((await _supportDir()).path, 'analysis.json'));
+      Map<String, dynamic> root = {'version': 1, 'tracks': <String, dynamic>{}};
       if (await file.exists()) {
         final decoded = jsonDecode(await file.readAsString());
         if (decoded is Map<String, dynamic>) {
@@ -198,8 +192,7 @@ class LibraryRepository {
       final source = File(sourcePath);
       final content = await source.readAsString();
       final decoded = jsonDecode(content);
-      if (decoded is! Map<String, dynamic> ||
-          decoded['tracks'] is! Map) {
+      if (decoded is! Map<String, dynamic> || decoded['tracks'] is! Map) {
         return false;
       }
       final destination = File(
@@ -218,10 +211,7 @@ class LibraryRepository {
     return index >= 0 ? normalized.substring(index + 1) : normalized;
   }
 
-  Future<List<Track>> scan(
-    String root, {
-    ScanProgress? onProgress,
-  }) {
+  Future<List<Track>> scan(String root, {ScanProgress? onProgress}) {
     return scanRoots([root], onProgress: onProgress);
   }
 
@@ -238,20 +228,21 @@ class LibraryRepository {
       final dir = Directory(root);
       if (!await dir.exists()) continue;
       try {
-        await for (final entity
-            in dir.list(recursive: true, followLinks: false)) {
+        await for (final entity in dir.list(
+          recursive: true,
+          followLinks: false,
+        )) {
           if (entity is File &&
-              audioExtensions
-                  .contains(p.extension(entity.path).toLowerCase())) {
+              audioExtensions.contains(
+                p.extension(entity.path).toLowerCase(),
+              )) {
             final key = entity.path.toLowerCase();
             if (seen.add(key)) files.add(entity);
           }
         }
       } catch (_) {}
     }
-    files.sort(
-      (a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()),
-    );
+    files.sort((a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()));
 
     final cache = await _readCache();
     final artworkDir = await _artworkDir();
@@ -264,6 +255,7 @@ class LibraryRepository {
         final stat = await file.stat();
         final cached = cache[file.path];
         if (cached is Map<String, dynamic> &&
+            cached['crate_cache_version'] == libraryCacheVersion &&
             cached['mtime'] == stat.modified.millisecondsSinceEpoch &&
             cached['size'] == stat.size) {
           tracks.add(Track.fromJson(cached));
@@ -274,6 +266,7 @@ class LibraryRepository {
           tracks.add(track);
           cache[file.path] = {
             ...track.toJson(),
+            'crate_cache_version': libraryCacheVersion,
             'mtime': stat.modified.millisecondsSinceEpoch,
             'size': stat.size,
           };
@@ -304,7 +297,8 @@ class LibraryRepository {
 
     final fallbackTitle = p.basenameWithoutExtension(file.path);
     final title = _clean(metadata?.title) ?? fallbackTitle;
-    final artist = _clean(metadata?.artist) ??
+    final artist =
+        _clean(metadata?.artist) ??
         _clean(metadata?.albumArtist) ??
         'Unknown artist';
     final album = _clean(metadata?.album) ?? 'Unknown album';
@@ -339,11 +333,70 @@ class LibraryRepository {
       year: (year != null && year > 0) ? year : null,
       trackNumber: metadata?.trackNumber,
       discNumber: metadata?.discNumber,
-      duration:
-          (duration != null && duration > Duration.zero) ? duration : null,
+      duration: (duration != null && duration > Duration.zero)
+          ? duration
+          : null,
       artworkPath: artworkPath,
       bpm: null,
+      replayGain: _readReplayGain(file),
     );
+  }
+
+  ReplayGainData? _readReplayGain(File file) {
+    try {
+      final rawMetadata = readAllMetadata(file, getImage: false);
+      if (rawMetadata is Mp3Metadata) {
+        final data = ReplayGainData.fromTags(
+          trackGain: _findTag(
+            rawMetadata.customMetadata,
+            'REPLAYGAIN_TRACK_GAIN',
+          ),
+          trackPeak: _findTag(
+            rawMetadata.customMetadata,
+            'REPLAYGAIN_TRACK_PEAK',
+          ),
+          albumGain: _findTag(
+            rawMetadata.customMetadata,
+            'REPLAYGAIN_ALBUM_GAIN',
+          ),
+          albumPeak: _findTag(
+            rawMetadata.customMetadata,
+            'REPLAYGAIN_ALBUM_PEAK',
+          ),
+        );
+        return data.hasAnyData ? data : null;
+      }
+      if (rawMetadata is VorbisMetadata) {
+        final data = ReplayGainData.fromTags(
+          trackGain: _firstValue(rawMetadata.replayGainTrackGain),
+          trackPeak: _firstValue(rawMetadata.replayGainTrackPeak),
+          albumGain: _firstValue(rawMetadata.replayGainAlbumGain),
+          albumPeak: _firstValue(rawMetadata.replayGainAlbumPeak),
+        );
+        return data.hasAnyData ? data : null;
+      }
+      if (rawMetadata is ApeMetadata) {
+        final data = ReplayGainData.fromTags(
+          trackGain: _findTag(rawMetadata.unknowns, 'REPLAYGAIN_TRACK_GAIN'),
+          trackPeak: _findTag(rawMetadata.unknowns, 'REPLAYGAIN_TRACK_PEAK'),
+          albumGain: _findTag(rawMetadata.unknowns, 'REPLAYGAIN_ALBUM_GAIN'),
+          albumPeak: _findTag(rawMetadata.unknowns, 'REPLAYGAIN_ALBUM_PEAK'),
+        );
+        return data.hasAnyData ? data : null;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static String? _findTag(Map<String, String> tags, String key) {
+    for (final entry in tags.entries) {
+      if (entry.key.toUpperCase() == key) return entry.value;
+    }
+    return null;
+  }
+
+  static String? _firstValue(List<String> values) {
+    return values.isEmpty ? null : values.first;
   }
 
   Future<void> _ensureAndroidPermission() async {
@@ -358,7 +411,8 @@ class LibraryRepository {
     final seen = <String>{};
     final result = <Track>[];
     for (final track in tracks) {
-      final key = '${track.path.toLowerCase()}|'
+      final key =
+          '${track.path.toLowerCase()}|'
           '${track.title.toLowerCase()}|'
           '${track.artist.toLowerCase()}|'
           '${track.album.toLowerCase()}|'
@@ -388,8 +442,7 @@ class LibraryRepository {
 
   static void _sort(List<Track> tracks) {
     tracks.sort((a, b) {
-      final byArtist =
-          a.artist.toLowerCase().compareTo(b.artist.toLowerCase());
+      final byArtist = a.artist.toLowerCase().compareTo(b.artist.toLowerCase());
       if (byArtist != 0) return byArtist;
       final byAlbum = a.album.toLowerCase().compareTo(b.album.toLowerCase());
       if (byAlbum != 0) return byAlbum;
