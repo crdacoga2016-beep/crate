@@ -45,6 +45,14 @@ function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_definitions(${TARGET} PRIVATE "$<$<CONFIG:Debug>:_DEBUG>")
 endfunction()
 
+# Crate Audio Core: built as a shared library for Dart FFI.
+add_library(crate_audio_core SHARED
+  ../src/native/crate_audio_core.cpp
+)
+apply_standard_settings(crate_audio_core)
+target_include_directories(crate_audio_core PUBLIC ../src/native)
+target_compile_definitions(crate_audio_core PRIVATE CRATE_AUDIO_CORE_EXPORTS)
+
 # Flutter library and tool build rules.
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
 add_subdirectory(${FLUTTER_MANAGED_DIR})
@@ -79,6 +87,12 @@ install(FILES "${FLUTTER_ICU_DATA_FILE}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}
   COMPONENT Runtime)
 
 install(FILES "${FLUTTER_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+
+install(TARGETS crate_audio_core
+  RUNTIME DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  LIBRARY DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  ARCHIVE DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
 
 if(PLUGIN_BUNDLED_LIBRARIES)

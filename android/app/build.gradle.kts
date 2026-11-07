@@ -14,6 +14,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    externalNativeBuild {
+        cmake {
+            path = file("CMakeLists.txt")
+        }
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.crate.crate"

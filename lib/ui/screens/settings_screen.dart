@@ -4,6 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../../services/audio_core_ffi.dart';
 import '../../state/app_state.dart';
 import '../widgets/eq_widget.dart';
 
@@ -373,13 +374,18 @@ class SettingsScreen extends StatelessWidget {
             const SizedBox(height: 18),
             _Section(
               title: 'Acerca de',
-              children: const [
+              children: [
                 ListTile(
-                  leading: Icon(Icons.info_outline_rounded),
-                  title: Text('Crate'),
-                  subtitle: Text('Reproductor local con AutoMix. v0.6.0'),
+                  leading: const Icon(Icons.info_outline_rounded),
+                  title: const Text('Crate'),
+                  subtitle: const Text('Reproductor local con AutoMix. v0.6.0'),
                 ),
                 ListTile(
+                  leading: const Icon(Icons.memory_outlined),
+                  title: const Text('Crate Audio Core'),
+                  subtitle: Text(AudioCoreFfi.versionLabel),
+                ),
+                const ListTile(
                   leading: Icon(Icons.storage_rounded),
                   title: Text('100% local'),
                   subtitle: Text('Tu música nunca sale de tu dispositivo.'),
