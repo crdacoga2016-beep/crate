@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:media_kit/media_kit.dart';
 
 import '../util/eq_graph.dart';
+import '../util/eq_model.dart';
 import '../util/gain_calculation.dart';
 import '../util/log.dart';
 
@@ -14,8 +15,7 @@ class _Deck {
   String? path;
   double gain = 1;
   double? peakDb;
-  double baseBass = 0;
-  double baseTreble = 0;
+  EqState eq = EqState.flat;
   double transitionBassCut = 0;
   double transitionHighCut = 0;
   double transitionIntensity = 0.6;
@@ -54,8 +54,7 @@ class PlayerService {
   String? _preparedPath;
   double _preparedRate = 1;
   double _preampDb = 0;
-  double _baseBass = 0;
-  double _baseTreble = 0;
+  EqState _currentEq = EqState.flat;
   Completer<void>? _fadeCompleter;
 
   final StreamController<Duration> _positionCtrl =
@@ -129,8 +128,7 @@ class PlayerService {
     await _incoming.stop();
     _preparedPath = null;
     _bindActive();
-    _a.baseBass = _baseBass;
-    _a.baseTreble = _baseTreble;
+    _a.eq = _currentEq;
     await _applyEq(_a);
     _a.gain = clampFinite(gain, 0.0, maximumMpvLinearGain, fallback: 1.0);
     _a.peakDb = peakDb;
@@ -164,8 +162,7 @@ class PlayerService {
     if (_fadeTimer != null || _preparedPath == path) return;
     await _incoming.stop();
     _preparedPath = null;
-    _incoming.baseBass = _baseBass;
-    _incoming.baseTreble = _baseTreble;
+    _incoming.eq = _currentEq;
     await _applyEq(_incoming);
     _incoming.peakDb = peakDb;
     await _configureMpv(_incoming);
@@ -208,11 +205,13 @@ class PlayerService {
   }
 
   Future<void> setBaseEq({required double bass, required double treble}) async {
-    _baseBass = clampFinite(bass, -12.0, 12.0);
-    _baseTreble = clampFinite(treble, -12.0, 12.0);
+    return setEq(EqState.migratedFromLegacy(bassDb: bass, trebleDb: treble));
+  }
+
+  Future<void> setEq(EqState eq) async {
+    _currentEq = eq.normalized();
     for (final deck in _decks) {
-      deck.baseBass = _baseBass;
-      deck.baseTreble = _baseTreble;
+      deck.eq = _currentEq;
       await _applyEq(deck);
     }
     if (_fadeTimer == null) {
@@ -222,8 +221,7 @@ class PlayerService {
 
   Future<void> _applyEq(_Deck deck) async {
     final settings = EqSettings(
-      bassDb: deck.baseBass,
-      trebleDb: deck.baseTreble,
+      baseEq: deck.eq,
       transitionBassCut: deck.transitionBassCut,
       transitionHighCut: deck.transitionHighCut,
       transitionIntensity: deck.transitionIntensity,
@@ -231,11 +229,7 @@ class PlayerService {
     await _setFilter(deck, buildEqFilter(settings));
   }
 
-  double _eqHeadroomGainFor(_Deck deck) {
-    final maximumBoost = math.max(deck.baseBass, deck.baseTreble);
-    if (maximumBoost <= 0.0) return 1.0;
-    return dbToLinearGain(-maximumBoost);
-  }
+  double _eqHeadroomGainFor(_Deck deck) => deck.eq.smartHeadroomGain;
 
   double _deckLinearGain(_Deck deck, {double fadeGain = 1.0}) {
     var linearGain = combinedLinearGain(
@@ -297,8 +291,7 @@ class PlayerService {
     final incoming = _incoming;
 
     final prepared = _preparedPath == nextPath;
-    incoming.baseBass = _baseBass;
-    incoming.baseTreble = _baseTreble;
+    incoming.eq = _currentEq;
     incoming.gain = clampFinite(
       incomingGain,
       0.0,
@@ -319,8 +312,8 @@ class PlayerService {
     }
     _active = 1 - _active;
     _bindActive();
-    outgoing.baseBass = _baseBass;
-    outgoing.baseTreble = _baseTreble;
+    outgoing.eq = _currentEq;
+    incoming.eq = _currentEq;
     await _setTransitionEq(outgoing, bassCut: bassSwap, intensity: eqIntensity);
     await _setTransitionEq(incoming, highCut: bassSwap, intensity: eqIntensity);
     await incoming.player.play();

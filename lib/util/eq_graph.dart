@@ -1,7 +1,8 @@
+import 'eq_model.dart';
+
 class EqSettings {
   const EqSettings({
-    this.bassDb = 0.0,
-    this.trebleDb = 0.0,
+    this.baseEq = EqState.flat,
     this.transitionBassCut = 0.0,
     this.transitionHighCut = 0.0,
     this.transitionIntensity = 0.6,
@@ -9,8 +10,7 @@ class EqSettings {
 
   static const empty = EqSettings();
 
-  final double bassDb;
-  final double trebleDb;
+  final EqState baseEq;
   final double transitionBassCut;
   final double transitionHighCut;
   final double transitionIntensity;
@@ -18,8 +18,14 @@ class EqSettings {
 
 String buildEqFilter(EqSettings settings) {
   final filters = <String>[];
-  _addBand(filters, frequency: 80, gainDb: settings.bassDb);
-  _addBand(filters, frequency: 10000, gainDb: settings.trebleDb);
+  if (!settings.baseEq.bypass) {
+    for (var index = 0; index < eqBandFrequencies.length; index++) {
+      final gainDb = index < settings.baseEq.gainsDb.length
+          ? settings.baseEq.gainsDb[index]
+          : 0.0;
+      _addBand(filters, frequency: eqBandFrequencies[index], gainDb: gainDb);
+    }
+  }
 
   final intensity = settings.transitionIntensity.clamp(0.0, 1.0).toDouble();
   if (settings.transitionBassCut > 0.0) {

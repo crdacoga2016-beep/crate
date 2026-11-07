@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../state/app_state.dart';
+import '../widgets/eq_widget.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -90,9 +91,9 @@ class SettingsScreen extends StatelessWidget {
                   subtitle: Text(
                     state.analyzing
                         ? 'Analizando ${state.analysisDone}/${state.analysisTotal}'
-                            ' · ${state.analysisCurrent}'
+                              ' · ${state.analysisCurrent}'
                         : '${state.library.where((t) => t.analysis != null).length} '
-                            'de ${state.library.length} pistas con BPM y beats',
+                              'de ${state.library.length} pistas con BPM y beats',
                   ),
                   trailing: state.analyzing
                       ? const SizedBox(
@@ -121,12 +122,11 @@ class SettingsScreen extends StatelessWidget {
                     state.analysisScanSeconds == 0
                         ? 'Canción completa · más lento'
                         : '${state.analysisScanSeconds} s por pista · '
-                            'más segundos = mejor BPM',
+                              'más segundos = mejor BPM',
                   ),
                   trailing: DropdownButton<int>(
-                    value: _scanOptions(state).contains(
-                          state.analysisScanSeconds,
-                        )
+                    value:
+                        _scanOptions(state).contains(state.analysisScanSeconds)
                         ? state.analysisScanSeconds
                         : 30,
                     dropdownColor: const Color(0xFF1B1B25),
@@ -163,9 +163,7 @@ class SettingsScreen extends StatelessWidget {
                           ? Icons.notifications_active_outlined
                           : Icons.notifications_off_outlined,
                     ),
-                    title: const Text(
-                      'Notificación y pantalla bloqueada',
-                    ),
+                    title: const Text('Notificación y pantalla bloqueada'),
                     subtitle: Text(
                       state.notificationSummary,
                       maxLines: 3,
@@ -188,8 +186,8 @@ class SettingsScreen extends StatelessWidget {
                       children: [
                         Expanded(
                           child: OutlinedButton(
-                            onPressed: () =>
-                                state.requestNotificationPermission(force: true),
+                            onPressed: () => state
+                                .requestNotificationPermission(force: true),
                             child: const Text('Permiso'),
                           ),
                         ),
@@ -197,8 +195,7 @@ class SettingsScreen extends StatelessWidget {
                         Expanded(
                           child: OutlinedButton(
                             onPressed: () async {
-                              final ok =
-                                  await state.testNotification();
+                              final ok = await state.testNotification();
                               if (!context.mounted) return;
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
@@ -265,8 +262,9 @@ class SettingsScreen extends StatelessWidget {
                     max: 12,
                     divisions: 11,
                     label: '${state.crossfadeSeconds.round()} s',
-                    onChanged:
-                        state.crossfade ? state.setCrossfadeSeconds : null,
+                    onChanged: state.crossfade
+                        ? state.setCrossfadeSeconds
+                        : null,
                   ),
                   trailing: Text('${state.crossfadeSeconds.round()} s'),
                 ),
@@ -332,6 +330,7 @@ class SettingsScreen extends StatelessWidget {
             _Section(
               title: 'Sonido',
               children: [
+                EqWidget(state: state),
                 ListTile(
                   leading: const Icon(Icons.bolt_rounded),
                   title: const Text('Preamp'),
@@ -347,7 +346,7 @@ class SettingsScreen extends StatelessWidget {
                         onChanged: state.setPreamp,
                       ),
                       const Text(
-                        'Pasos de 0.2 dB. Si distorsiona, usa -1.0 o menos.',
+                        'Pasos de 0.2 dB. El headroom automático del EQ se aplica además.',
                         style: TextStyle(
                           fontSize: 11,
                           color: Color(0xFF8A8A9A),
@@ -360,32 +359,6 @@ class SettingsScreen extends StatelessWidget {
                     child: Text('${state.preampDb.toStringAsFixed(1)} dB'),
                   ),
                 ),
-                ListTile(
-                  leading: const Icon(Icons.speaker_rounded),
-                  title: const Text('Graves'),
-                  subtitle: Slider(
-                    value: state.bassDb,
-                    min: -12,
-                    max: 12,
-                    divisions: 24,
-                    label: '${state.bassDb.toStringAsFixed(1)} dB',
-                    onChanged: state.setBass,
-                  ),
-                  trailing: Text('${state.bassDb.toStringAsFixed(1)} dB'),
-                ),
-                ListTile(
-                  leading: const Icon(Icons.hearing_rounded),
-                  title: const Text('Agudos'),
-                  subtitle: Slider(
-                    value: state.trebleDb,
-                    min: -12,
-                    max: 12,
-                    divisions: 24,
-                    label: '${state.trebleDb.toStringAsFixed(1)} dB',
-                    onChanged: state.setTreble,
-                  ),
-                  trailing: Text('${state.trebleDb.toStringAsFixed(1)} dB'),
-                ),
               ],
             ),
             const SizedBox(height: 18),
@@ -395,16 +368,12 @@ class SettingsScreen extends StatelessWidget {
                 ListTile(
                   leading: Icon(Icons.info_outline_rounded),
                   title: Text('Crate'),
-                  subtitle: Text(
-                    'Reproductor local con AutoMix. v0.6.0',
-                  ),
+                  subtitle: Text('Reproductor local con AutoMix. v0.6.0'),
                 ),
                 ListTile(
                   leading: Icon(Icons.storage_rounded),
                   title: Text('100% local'),
-                  subtitle: Text(
-                    'Tu música nunca sale de tu dispositivo.',
-                  ),
+                  subtitle: Text('Tu música nunca sale de tu dispositivo.'),
                 ),
               ],
             ),
@@ -414,10 +383,7 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 
-  Future<void> _preampDialog(
-    BuildContext context,
-    AppState state,
-  ) async {
+  Future<void> _preampDialog(BuildContext context, AppState state) async {
     final controller = TextEditingController(
       text: state.preampDb.toStringAsFixed(1),
     );
@@ -457,10 +423,7 @@ class SettingsScreen extends StatelessWidget {
     if (result != null) state.setPreamp(result);
   }
 
-  Future<void> _importAnalysis(
-    BuildContext context,
-    AppState state,
-  ) async {
+  Future<void> _importAnalysis(BuildContext context, AppState state) async {
     final files = await FilePicker.pickFiles(
       type: FileType.custom,
       allowedExtensions: ['json'],
@@ -475,22 +438,17 @@ class SettingsScreen extends StatelessWidget {
         content: Text(
           result.ok
               ? 'Análisis importado: ${result.entries} pistas. '
-                  'Coincidencias: ${result.matches}/${result.total}.'
+                    'Coincidencias: ${result.matches}/${result.total}.'
               : 'No se pudo importar el análisis.',
         ),
       ),
     );
   }
 
-  Future<void> _analyzeAll(
-    BuildContext context,
-    AppState state,
-  ) async {
+  Future<void> _analyzeAll(BuildContext context, AppState state) async {
     if (Platform.isAndroid && state.isPlaying) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Pausa la reproducción para analizar'),
-        ),
+        const SnackBar(content: Text('Pausa la reproducción para analizar')),
       );
       return;
     }
@@ -510,15 +468,10 @@ class SettingsScreen extends StatelessWidget {
     return options;
   }
 
-  Future<void> _reanalyzeAll(
-    BuildContext context,
-    AppState state,
-  ) async {
+  Future<void> _reanalyzeAll(BuildContext context, AppState state) async {
     if (Platform.isAndroid && state.isPlaying) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Pausa la reproducción para reanalizar'),
-        ),
+        const SnackBar(content: Text('Pausa la reproducción para reanalizar')),
       );
       return;
     }
@@ -626,6 +579,3 @@ class _Section extends StatelessWidget {
     );
   }
 }
-
-
-

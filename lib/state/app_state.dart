@@ -10,6 +10,7 @@ import '../services/device_analyzer.dart';
 import '../services/library_repository.dart';
 import '../services/media_notification.dart';
 import '../services/player_service.dart';
+import '../util/eq_model.dart';
 import '../util/gain_calculation.dart';
 import '../util/log.dart';
 
@@ -56,8 +57,10 @@ class AppState extends ChangeNotifier {
   List<String> musicRoots = [];
   double volume = 1;
   double preampDb = 0;
-  double bassDb = 0;
-  double trebleDb = 0;
+  AudioOutputProfile eqOutput = AudioOutputProfile.speaker;
+  Map<AudioOutputProfile, EqState> eqProfiles = {
+    for (final profile in AudioOutputProfile.values) profile: EqState.flat,
+  };
 
   Track? get current =>
       index >= 0 && index < queue.length ? queue[index] : null;
@@ -79,6 +82,7 @@ class AppState extends ChangeNotifier {
   StreamSubscription<void>? _playerSub;
   StreamSubscription<bool>? _playingSub;
   Timer? _mixTimer;
+  Timer? _eqApplyTimer;
   DateTime _lastMediaPush = DateTime.fromMillisecondsSinceEpoch(0);
   bool _mixing = false;
   bool _wasMixing = false;
@@ -88,6 +92,13 @@ class AppState extends ChangeNotifier {
 
   bool get isPlaying => player.playing;
   bool get isMixing => player.isMixing || _mixing;
+  EqState get currentEq => eqProfiles[eqOutput] ?? EqState.flat;
+  List<double> get eqGainsDb => currentEq.gainsDb;
+  bool get eqBypass => currentEq.bypass;
+  double get eqMaxResponseDb => currentEq.maximumResponseDb;
+  double get eqSmartHeadroomDb => currentEq.smartHeadroomDb;
+  double get eqSmartHeadroomGain => currentEq.smartHeadroomGain;
+  String get selectedEqPresetId => currentEq.selectedPresetId;
 
   Future<void> init() async {
     await _mediaNotification.init(
@@ -147,15 +158,10 @@ class AppState extends ChangeNotifier {
       await _prefs!.setDouble('preampDb', preampDb);
     }
     final storedBassDb = _prefs!.getDouble('bassDb');
-    bassDb = clampFinite(storedBassDb ?? 0.0, -12.0, 12.0);
-    if (storedBassDb == null || bassDb != storedBassDb) {
-      await _prefs!.setDouble('bassDb', bassDb);
-    }
+    final legacyBassDb = clampFinite(storedBassDb ?? 0.0, -12.0, 12.0);
     final storedTrebleDb = _prefs!.getDouble('trebleDb');
-    trebleDb = clampFinite(storedTrebleDb ?? 0.0, -12.0, 12.0);
-    if (storedTrebleDb == null || trebleDb != storedTrebleDb) {
-      await _prefs!.setDouble('trebleDb', trebleDb);
-    }
+    final legacyTrebleDb = clampFinite(storedTrebleDb ?? 0.0, -12.0, 12.0);
+    await _loadEqProfiles(bassDb: legacyBassDb, trebleDb: legacyTrebleDb);
 
     library = (await repository.loadCached())
         .where((track) => _isUnderAnyRoot(track.path))
@@ -184,7 +190,7 @@ class AppState extends ChangeNotifier {
     });
     await player.setVolume(volume);
     await player.setPreamp(preampDb);
-    await player.setBaseEq(bass: bassDb, treble: trebleDb);
+    await player.setEq(currentEq);
     _publishMediaState();
 
     if (const bool.fromEnvironment('CRATE_AUTOPLAY') && library.isNotEmpty) {
@@ -427,6 +433,95 @@ class AppState extends ChangeNotifier {
     _safeNotify();
   }
 
+  Future<void> _loadEqProfiles({
+    required double bassDb,
+    required double trebleDb,
+  }) async {
+    final saved = <AudioOutputProfile, String?>{};
+    var hasAnySaved = false;
+    for (final profile in AudioOutputProfile.values) {
+      final encoded = _prefs!.getString('eqProfile_${profile.key}');
+      saved[profile] = encoded;
+      hasAnySaved = hasAnySaved || encoded != null;
+    }
+    final migrated = EqState.migratedFromLegacy(
+      bassDb: bassDb,
+      trebleDb: trebleDb,
+    );
+    for (final profile in AudioOutputProfile.values) {
+      final encoded = saved[profile];
+      eqProfiles[profile] = encoded == null
+          ? (hasAnySaved ? EqState.flat : migrated)
+          : EqState.decode(encoded);
+    }
+    eqOutput = audioOutputProfileFromKey(_prefs!.getString('eqOutput'));
+    await _persistEqState();
+  }
+
+  Future<void> _persistEqState() async {
+    final prefs = _prefs;
+    if (prefs == null) return;
+    await prefs.setString('eqOutput', eqOutput.key);
+    for (final profile in AudioOutputProfile.values) {
+      await prefs.setString(
+        'eqProfile_${profile.key}',
+        (eqProfiles[profile] ?? EqState.flat).encode(),
+      );
+    }
+  }
+
+  Future<void> _applyCurrentEq() async {
+    try {
+      await player.setEq(currentEq);
+    } catch (error) {
+      logLine('eq apply error: $error');
+    }
+  }
+
+  void _queueEqUpdate() {
+    _eqApplyTimer?.cancel();
+    unawaited(_persistEqState());
+    _eqApplyTimer = Timer(const Duration(milliseconds: 60), () {
+      unawaited(_applyCurrentEq());
+    });
+  }
+
+  void selectEqOutput(AudioOutputProfile profile) {
+    eqOutput = profile;
+    _queueEqUpdate();
+    _safeNotify();
+  }
+
+  void setEqBand(int index, double value) {
+    if (index < 0 || index >= eqBandFrequencies.length) return;
+    final gains = List<double>.of(currentEq.gainsDb);
+    gains[index] = quantizeEqGain(value);
+    eqProfiles[eqOutput] = currentEq.copyWith(
+      gainsDb: gains,
+      selectedPresetId: 'custom',
+    );
+    _queueEqUpdate();
+    _safeNotify();
+  }
+
+  void applyEqPreset(String presetId) {
+    final preset = eqPresetById(presetId);
+    if (preset == null) return;
+    eqProfiles[eqOutput] = EqState.fromPreset(presetId);
+    _queueEqUpdate();
+    _safeNotify();
+  }
+
+  void setEqBypass(bool value) {
+    eqProfiles[eqOutput] = currentEq.withBypass(value);
+    _queueEqUpdate();
+    _safeNotify();
+  }
+
+  void resetEq() {
+    applyEqPreset('flat');
+  }
+
   Future<void> seek(Duration position) async {
     await player.seek(position);
     _publishMediaState();
@@ -443,20 +538,6 @@ class AppState extends ChangeNotifier {
     preampDb = clampFinite(value, -12.0, 6.0);
     _prefs?.setDouble('preampDb', preampDb);
     player.setPreamp(preampDb);
-    _safeNotify();
-  }
-
-  void setBass(double value) {
-    bassDb = clampFinite(value, -12.0, 12.0);
-    _prefs?.setDouble('bassDb', bassDb);
-    player.setBaseEq(bass: bassDb, treble: trebleDb);
-    _safeNotify();
-  }
-
-  void setTreble(double value) {
-    trebleDb = clampFinite(value, -12.0, 12.0);
-    _prefs?.setDouble('trebleDb', trebleDb);
-    player.setBaseEq(bass: bassDb, treble: trebleDb);
     _safeNotify();
   }
 
@@ -1340,6 +1421,7 @@ class AppState extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _mixTimer?.cancel();
+    _eqApplyTimer?.cancel();
     _playerSub?.cancel();
     _playingSub?.cancel();
     player.dispose();
