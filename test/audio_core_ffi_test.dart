@@ -39,6 +39,19 @@ void main() {
     expect(samples, orderedEquals(original));
   });
 
+  test('el medidor True Peak detecta picos entre muestras', () {
+    final samples = Float32List.fromList([0.0, 0.5, -0.8, 0.5, -0.2]);
+    final peakDb = AudioCoreFfi.measureTruePeakDb(samples, 48000);
+
+    if (peakDb == null) {
+      markTestSkipped('Crate Audio Core native library not available');
+      return;
+    }
+
+    expect(peakDb.isFinite, isTrue);
+    expect(peakDb, greaterThan(20 * math.log(0.8) / math.ln10));
+  });
+
   test('el limitador avanzado ve el pico antes de que llegue', () {
     final original = List<double>.generate(240, (index) {
       final sign = index.isEven ? 1.0 : -1.0;

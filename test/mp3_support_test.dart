@@ -12,9 +12,9 @@ void main() {
     final tmp = await Directory.systemTemp.createTemp('crate_support_');
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
-      const MethodChannel('plugins.flutter.io/path_provider'),
-      (call) async => tmp.path,
-    );
+          const MethodChannel('plugins.flutter.io/path_provider'),
+          (call) async => tmp.path,
+        );
   });
   test('mp3 is included and analyzable', () async {
     final ffmpeg =
@@ -64,7 +64,9 @@ void main() {
       // Scan must include the MP3.
       final library = LibraryRepository();
       final tracks = await library.scanRoots([dir.path]);
-      final names = tracks.map((t) => t.path.split(Platform.pathSeparator).last);
+      final names = tracks.map(
+        (t) => t.path.split(Platform.pathSeparator).last,
+      );
       expect(names, contains('tone.mp3'));
 
       // Analyzer must return a valid analysis for MP3.
@@ -74,6 +76,9 @@ void main() {
       final bpm = (analysis!['bpm'] as num?)?.toDouble() ?? 0;
       expect(bpm, greaterThan(40));
       expect(bpm, lessThan(220));
+      final truePeakDb = (analysis['truePeakDb'] as num?)?.toDouble();
+      expect(truePeakDb, isNotNull);
+      expect(truePeakDb!.isFinite, isTrue);
     } finally {
       try {
         await dir.delete(recursive: true);
@@ -85,8 +90,10 @@ void main() {
     try {
       MediaKit.ensureInitialized();
     } catch (_) {
-      markTestSkipped('libmpv is not available (add the Release folder '
-          'to PATH or run the Windows build)');
+      markTestSkipped(
+        'libmpv is not available (add the Release folder '
+        'to PATH or run the Windows build)',
+      );
     }
     final ffmpeg =
         '${Directory.current.path}${Platform.pathSeparator}tools${Platform.pathSeparator}ffmpeg.exe';

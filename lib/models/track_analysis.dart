@@ -17,6 +17,7 @@ class TrackAnalysis {
     this.beatsPerBar = 4,
     this.lufs,
     this.peakDb,
+    this.truePeakDb,
     this.keyConfidence = 0,
     this.version = 1,
     this.features = const [],
@@ -37,6 +38,7 @@ class TrackAnalysis {
   final double energy;
   final double? lufs;
   final double? peakDb;
+  final double? truePeakDb;
   final int keyRoot;
   final bool isMinor;
   final String key;
@@ -87,13 +89,15 @@ class TrackAnalysis {
       energy: (json['energy'] as num?)?.toDouble() ?? 0,
       lufs: (json['lufs'] as num?)?.toDouble(),
       peakDb: (json['peakDb'] as num?)?.toDouble(),
+      truePeakDb: (json['truePeakDb'] as num?)?.toDouble(),
       keyRoot: (json['keyRoot'] as num?)?.toInt() ?? 0,
       isMinor: json['isMinor'] == true,
       key: json['key'] as String? ?? '',
       camelot: json['camelot'] as String? ?? '',
       keyConfidence: (json['keyConfidence'] as num?)?.toDouble() ?? 0,
       version: (json['version'] as num?)?.toInt() ?? 1,
-      features: (json['features'] as List?)
+      features:
+          (json['features'] as List?)
               ?.whereType<num>()
               .map((value) => value.toDouble())
               .toList() ??

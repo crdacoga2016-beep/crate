@@ -21,6 +21,8 @@ const double eqMaximumGainDb = 12.0;
 const double eqGainStepDb = 0.5;
 const double eqBandQ = 1.0;
 const double smartHeadroomSafetyDb = 0.5;
+const double speakerPreampBoostDb = 3.0;
+const Set<int> speakerHeadroomIgnoredFrequencies = {31, 62};
 const double eqResponseDefaultSampleRate = 48000.0;
 
 enum AudioOutputProfile { speaker, headphones, bluetooth, usb }
@@ -89,6 +91,11 @@ const List<EqPreset> eqPresets = [
     label: 'Bluetooth',
     gainsDb: [0.5, 1.0, 0.5, -0.5, 0.0, 0.5, 1.0, 1.0, 0.5, 0.5],
   ),
+  EqPreset(
+    id: 'speaker_powerful',
+    label: 'Altavoz Potente',
+    gainsDb: [0.0, 0.0, 4.0, 5.0, 0.0, 0.0, 2.0, 2.5, 1.0, 0.0],
+  ),
 ];
 
 EqPreset? eqPresetById(String id) {
@@ -119,15 +126,41 @@ class EqState {
     return gainsDb;
   }
 
-  double get maximumResponseDb => maximumEqResponseDb(effectiveGainsDb);
+  double maximumResponseDbFor(AudioOutputProfile profile) {
+    final ignoredFrequencies = profile == AudioOutputProfile.speaker
+        ? speakerHeadroomIgnoredFrequencies
+        : const <int>{};
+    return maximumEqResponseDb(
+      effectiveGainsDb,
+      ignoredFrequencies: ignoredFrequencies,
+    );
+  }
 
-  double get smartHeadroomDb {
-    final maximum = maximumResponseDb;
+  double get maximumResponseDb =>
+      maximumResponseDbFor(AudioOutputProfile.headphones);
+
+  double smartHeadroomDbFor(AudioOutputProfile profile) {
+    final maximum = maximumResponseDbFor(profile);
     if (maximum <= 0.0) return 0.0;
     return -(maximum + smartHeadroomSafetyDb);
   }
 
-  double get smartHeadroomGain => dbToLinearGain(smartHeadroomDb);
+  double get smartHeadroomDb =>
+      smartHeadroomDbFor(AudioOutputProfile.headphones);
+
+  double smartHeadroomGainFor(AudioOutputProfile profile) =>
+      dbToLinearGain(smartHeadroomDbFor(profile));
+
+  double get smartHeadroomGain =>
+      smartHeadroomGainFor(AudioOutputProfile.headphones);
+
+  double effectivePreampDbFor(
+    double manualPreampDb,
+    AudioOutputProfile profile,
+  ) {
+    return manualPreampDb +
+        (profile == AudioOutputProfile.speaker ? speakerPreampBoostDb : 0.0);
+  }
 
   EqState copyWith({
     List<double>? gainsDb,
@@ -250,6 +283,7 @@ double eqResponseDbAtHz(
   required double frequencyHz,
   double sampleRate = eqResponseDefaultSampleRate,
   double q = eqBandQ,
+  Set<int> ignoredFrequencies = const <int>{},
 }) {
   if (frequencyHz <= 0.0 || sampleRate <= 0.0) return 0.0;
   var response = 0.0;
@@ -257,6 +291,7 @@ double eqResponseDbAtHz(
     final gainDb = index < gainsDb.length
         ? quantizeEqGain(gainsDb[index])
         : 0.0;
+    if (ignoredFrequencies.contains(eqBandFrequencies[index])) continue;
     if (gainDb.abs() < 0.05) continue;
     response += peakingResponseDb(
       frequencyHz: frequencyHz,
@@ -323,6 +358,7 @@ double maximumEqResponseDb(
   double minimumFrequency = 20.0,
   double maximumFrequency = 20000.0,
   int points = 720,
+  Set<int> ignoredFrequencies = const <int>{},
 }) {
   if (points < 1) return 0.0;
   final safeMinimum = minimumFrequency <= 0.0 ? 20.0 : minimumFrequency;
@@ -337,6 +373,7 @@ double maximumEqResponseDb(
       gainsDb,
       frequencyHz: frequency,
       sampleRate: sampleRate,
+      ignoredFrequencies: ignoredFrequencies,
     );
     if (response > maximum) maximum = response;
   }

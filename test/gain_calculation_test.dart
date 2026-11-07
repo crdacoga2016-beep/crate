@@ -66,6 +66,17 @@ void main() {
       );
     });
 
+    test('el True Peak prevalece sobre el pico de muestra', () {
+      expect(
+        trackGainFor(normalize: false, peakDb: -3.0, truePeakDb: -0.2),
+        closeTo(0.9120107, 1e-6),
+      );
+      expect(
+        trackGainFor(normalize: false, peakDb: -0.2, truePeakDb: -3.0),
+        greaterThan(0.9120107),
+      );
+    });
+
     test('aplica techo de pico aunque falte LUFS', () {
       expect(
         trackGainFor(normalize: true, lufs: null, peakDb: -0.3),

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/native_audio_engine.dart';
 import '../models/track.dart';
 import '../models/track_analysis.dart';
 import '../services/device_analyzer.dart';
@@ -38,6 +39,7 @@ class AppState extends ChangeNotifier {
   bool gapless = true;
   bool normalize = true;
   bool useReplayGain = true;
+  bool useNativeLimiter = false;
   bool skipSilence = true;
   bool smartShuffle = false;
   bool autoAnalyze = true;
@@ -96,10 +98,12 @@ class AppState extends ChangeNotifier {
   EqState get currentEq => eqProfiles[eqOutput] ?? EqState.flat;
   List<double> get eqGainsDb => currentEq.gainsDb;
   bool get eqBypass => currentEq.bypass;
-  double get eqMaxResponseDb => currentEq.maximumResponseDb;
-  double get eqSmartHeadroomDb => currentEq.smartHeadroomDb;
-  double get eqSmartHeadroomGain => currentEq.smartHeadroomGain;
+  double get eqMaxResponseDb => currentEq.maximumResponseDbFor(eqOutput);
+  double get eqSmartHeadroomDb => currentEq.smartHeadroomDbFor(eqOutput);
+  double get eqSmartHeadroomGain => currentEq.smartHeadroomGainFor(eqOutput);
   String get selectedEqPresetId => currentEq.selectedPresetId;
+  NativeAudioEngineStatus get nativeAudioEngineStatus =>
+      NativeAudioEngineProbe.status;
 
   Future<void> init() async {
     await _mediaNotification.init(
@@ -140,6 +144,7 @@ class AppState extends ChangeNotifier {
     gapless = _prefs!.getBool('gapless') ?? true;
     normalize = _prefs!.getBool('normalize') ?? true;
     useReplayGain = _prefs!.getBool('useReplayGain') ?? true;
+    useNativeLimiter = _prefs!.getBool('useNativeLimiter') ?? false;
     skipSilence = _prefs!.getBool('skipSilence') ?? true;
     smartShuffle = _prefs!.getBool('smartShuffle') ?? false;
     autoAnalyze = _prefs!.getBool('autoAnalyze') ?? true;
@@ -192,7 +197,8 @@ class AppState extends ChangeNotifier {
     });
     await player.setVolume(volume);
     await player.setPreamp(preampDb);
-    await player.setEq(currentEq);
+    player.setUseNativeLimiter(useNativeLimiter);
+    await player.setEq(currentEq, outputProfile: eqOutput);
     _publishMediaState();
 
     if (const bool.fromEnvironment('CRATE_AUTOPLAY') && library.isNotEmpty) {
@@ -474,7 +480,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> _applyCurrentEq() async {
     try {
-      await player.setEq(currentEq);
+      await player.setEq(currentEq, outputProfile: eqOutput);
     } catch (error) {
       logLine('eq apply error: $error');
     }
@@ -490,6 +496,9 @@ class AppState extends ChangeNotifier {
 
   void selectEqOutput(AudioOutputProfile profile) {
     eqOutput = profile;
+    if (profile == AudioOutputProfile.speaker) {
+      eqProfiles[profile] = EqState.fromPreset('speaker_powerful');
+    }
     _queueEqUpdate();
     _safeNotify();
   }
@@ -550,13 +559,14 @@ class AppState extends ChangeNotifier {
       normalize: normalize,
       lufs: analysis?.lufs,
       peakDb: analysis?.peakDb,
+      truePeakDb: analysis?.truePeakDb,
       replayGainDb: replayGain?.effectiveTrackGainDb,
       replayGainPeakDb: replayGain?.effectiveTrackPeakDb,
     );
   }
 
   double? _peakDbFor(Track track) {
-    var peakDb = track.analysis?.peakDb;
+    var peakDb = track.analysis?.truePeakDb ?? track.analysis?.peakDb;
     final replayPeakDb = useReplayGain
         ? track.replayGain?.effectiveTrackPeakDb
         : null;
@@ -1275,6 +1285,13 @@ class AppState extends ChangeNotifier {
     if (track != null) {
       await player.setTrackGain(_gainFor(track), peakDb: _peakDbFor(track));
     }
+    _safeNotify();
+  }
+
+  void setUseNativeLimiter(bool value) {
+    useNativeLimiter = value;
+    _prefs?.setBool('useNativeLimiter', value);
+    player.setUseNativeLimiter(value);
     _safeNotify();
   }
 

@@ -4,6 +4,16 @@ import 'dart:io';
 import 'dart:typed_data';
 
 typedef _CrateAudioCoreVersion = Pointer<Uint8> Function();
+typedef _CrateAudioCoreMeasureTruePeakNative = Float Function(
+  Pointer<Float> buffer,
+  Int32 numSamples,
+  Int32 sampleRate,
+);
+typedef _CrateAudioCoreMeasureTruePeak = double Function(
+  Pointer<Float> buffer,
+  int numSamples,
+  int sampleRate,
+);
 typedef _CrateAudioCoreProcessLimiterNative = Float Function(
   Pointer<Float> buffer,
   Int32 numSamples,
@@ -46,6 +56,7 @@ class AudioCoreFfi {
   static _SystemFree? _freeFunction;
   static _CrateAudioCoreVersion? _version;
   static _CrateAudioCoreProcessLimiter? _processLimiter;
+  static _CrateAudioCoreMeasureTruePeak? _measureTruePeak;
   static _CrateAudioCoreProcessLimiterAdvanced? _processLimiterAdvanced;
 
   static bool get isAvailable => version != null;
@@ -156,6 +167,37 @@ class AudioCoreFfi {
   static String get _systemLibraryName {
     if (Platform.isWindows) return 'msvcrt.dll';
     return 'libc.so';
+  }
+
+  static double? measureTruePeakDb(Float32List samples, int sampleRate) {
+    if (samples.isEmpty || sampleRate <= 0) return null;
+    try {
+      final function = _loadMeasureTruePeak();
+      if (function == null) return null;
+      final pointer = _allocateNative(samples.length * 4);
+      if (pointer == null) return null;
+      final floatPointer = pointer.cast<Float>();
+      try {
+        floatPointer.asTypedList(samples.length).setAll(0, samples);
+        final peakDb = function.call(floatPointer, samples.length, sampleRate);
+        return peakDb.isFinite ? peakDb : null;
+      } finally {
+        _freeNative(pointer);
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static _CrateAudioCoreMeasureTruePeak? _loadMeasureTruePeak() {
+    if (_measureTruePeak != null) return _measureTruePeak;
+    final library = _library ??= DynamicLibrary.open(_libraryName);
+    final function = library.lookupFunction<
+      _CrateAudioCoreMeasureTruePeakNative,
+      _CrateAudioCoreMeasureTruePeak
+    >('crate_audio_core_measure_true_peak_db');
+    _measureTruePeak = function;
+    return function;
   }
 
   static _CrateAudioCoreVersion? _loadVersion() {

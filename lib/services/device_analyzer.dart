@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/track.dart';
+import '../services/audio_core_ffi.dart';
 
 class DeviceAnalyzer {
   static const MethodChannel _channel = MethodChannel('crate/analysis');
@@ -84,9 +85,7 @@ class DeviceAnalyzer {
       input,
       '-vn',
       '-ac',
-      '1',
-      '-ar',
-      '11025',
+      '2',
       '-c:a',
       'pcm_s16le',
       output.path,
@@ -137,6 +136,7 @@ Future<Map<String, dynamic>?> analyzeWavFile(
   try {
     final bytes = await File(path).readAsBytes();
     final decoded = await WavDecoder().decode(bytes);
+    final measuredTruePeakDb = _measureTruePeakDb(bytes);
     var samples = decoded.audioData;
     var sampleRate = decoded.sampleRate;
     if (samples.isEmpty || sampleRate <= 0) return null;
@@ -148,16 +148,14 @@ Future<Map<String, dynamic>?> analyzeWavFile(
     }
 
     final wavDuration = samples.length / sampleRate;
-    final duration =
-        (fullDuration != null && fullDuration > wavDuration)
-            ? fullDuration
-            : wavDuration;
+    final duration = (fullDuration != null && fullDuration > wavDuration)
+        ? fullDuration
+        : wavDuration;
     final rms = _rmsStats(samples, sampleRate, wavDuration);
     final leadIn = rms.leadIn;
-    final audibleEnd =
-        (fullDuration != null && fullDuration > wavDuration)
-            ? fullDuration
-            : rms.audibleEnd;
+    final audibleEnd = (fullDuration != null && fullDuration > wavDuration)
+        ? fullDuration
+        : rms.audibleEnd;
 
     final wholeTrack = scanSeconds <= 0;
     final analysisSeconds = wholeTrack
@@ -181,8 +179,9 @@ Future<Map<String, dynamic>?> analyzeWavFile(
         .ceil()
         .clamp(startIndex, samples.length)
         .toInt();
-    final excerpt =
-        startIndex < endIndex ? samples.sublist(startIndex, endIndex) : samples;
+    final excerpt = startIndex < endIndex
+        ? samples.sublist(startIndex, endIndex)
+        : samples;
 
     final spectral = _spectralFeatures(excerpt, sampleRate);
     final tempo = _estimateTempo(spectral.flux, sampleRate);
@@ -245,6 +244,7 @@ Future<Map<String, dynamic>?> analyzeWavFile(
       'energy': rounded(rms.energy, 4),
       'lufs': null,
       'peakDb': rounded(rms.peakDb, 2),
+      'truePeakDb': rounded(measuredTruePeakDb ?? rms.peakDb, 2),
       'keyRoot': 0,
       'isMinor': false,
       'key': '',
@@ -257,7 +257,84 @@ Future<Map<String, dynamic>?> analyzeWavFile(
   }
 }
 
-({List<double> flux, double centroid, double flatness, double rolloff, double zcr})
+double? _measureTruePeakDb(Uint8List bytes) {
+  try {
+    final decoded = _readPcm16Wave(bytes);
+    if (decoded == null) return null;
+    if (decoded.channels <= 1) {
+      return AudioCoreFfi.measureTruePeakDb(
+        decoded.interleaved,
+        decoded.sampleRate,
+      );
+    }
+    double? bestPeakDb;
+    final frames = decoded.interleaved.length ~/ decoded.channels;
+    for (var channel = 0; channel < decoded.channels; channel++) {
+      final mono = Float32List(frames);
+      for (var frame = 0; frame < frames; frame++) {
+        mono[frame] = decoded.interleaved[frame * decoded.channels + channel];
+      }
+      final channelPeakDb = AudioCoreFfi.measureTruePeakDb(
+        mono,
+        decoded.sampleRate,
+      );
+      if (channelPeakDb != null &&
+          (bestPeakDb == null || channelPeakDb > bestPeakDb)) {
+        bestPeakDb = channelPeakDb;
+      }
+    }
+    return bestPeakDb;
+  } catch (_) {
+    return null;
+  }
+}
+
+({Float32List interleaved, int sampleRate, int channels})? _readPcm16Wave(
+  Uint8List bytes,
+) {
+  if (bytes.length < 44) return null;
+  final data = ByteData.sublistView(bytes);
+  final channels = data.getUint16(22, Endian.little);
+  final sampleRate = data.getUint32(24, Endian.little);
+  final bitsPerSample = data.getUint16(34, Endian.little);
+  if (channels <= 0 || sampleRate <= 0 || bitsPerSample != 16) return null;
+  var dataOffset = -1;
+  var dataSize = 0;
+  for (var index = 12; index + 8 <= bytes.length; index++) {
+    if (bytes[index] == 0x64 &&
+        bytes[index + 1] == 0x61 &&
+        bytes[index + 2] == 0x74 &&
+        bytes[index + 3] == 0x61) {
+      dataOffset = index + 8;
+      dataSize = data.getUint32(index + 4, Endian.little);
+      break;
+    }
+  }
+  if (dataOffset < 0 || dataOffset >= bytes.length) return null;
+  final availableBytes = bytes.length - dataOffset;
+  final frameBytes = 2 * channels;
+  final frames = (dataSize <= 0 ? availableBytes : dataSize) ~/ frameBytes;
+  if (frames <= 0) return null;
+  final sampleCount = frames * channels;
+  if (sampleCount <= 0) return null;
+  final interleaved = Float32List(sampleCount);
+  for (var frame = 0; frame < frames; frame++) {
+    for (var channel = 0; channel < channels; channel++) {
+      final offset = dataOffset + ((frame * channels + channel) * 2);
+      interleaved[frame * channels + channel] =
+          data.getInt16(offset, Endian.little) / 32768.0;
+    }
+  }
+  return (interleaved: interleaved, sampleRate: sampleRate, channels: channels);
+}
+
+({
+  List<double> flux,
+  double centroid,
+  double flatness,
+  double rolloff,
+  double zcr,
+})
 _spectralFeatures(Float32List samples, int sampleRate) {
   const frameSize = 2048;
   const hop = 512;
@@ -358,10 +435,7 @@ _spectralFeatures(Float32List samples, int sampleRate) {
   final mean = flux.reduce((a, b) => a + b) / flux.length;
   final normalized = [for (final value in flux) value - mean];
   final minLag = math.max(1, (frameRate * 60 / 200).round());
-  final maxLag = math.min(
-    normalized.length - 2,
-    (frameRate * 60 / 60).round(),
-  );
+  final maxLag = math.min(normalized.length - 2, (frameRate * 60 / 60).round());
   if (maxLag < minLag) {
     return (bpm: 120, phaseSeconds: 0);
   }
@@ -406,8 +480,7 @@ _spectralFeatures(Float32List samples, int sampleRate) {
   for (final candidate in candidates) {
     final prior = _tempoPrior(candidate.bpm);
     final score =
-        (0.55 * candidate.corr / maxCorr +
-            0.45 * candidate.beat / maxBeat) *
+        (0.55 * candidate.corr / maxCorr + 0.45 * candidate.beat / maxBeat) *
         prior;
     if (score > bestScore) {
       bestScore = score;
@@ -430,10 +503,7 @@ _spectralFeatures(Float32List samples, int sampleRate) {
       bestPhase = phase;
     }
   }
-  return (
-    bpm: best.bpm,
-    phaseSeconds: bestPhase * hop / sampleRate,
-  );
+  return (bpm: best.bpm, phaseSeconds: bestPhase * hop / sampleRate);
 }
 
 double _tempoPrior(double bpm) {
@@ -441,8 +511,11 @@ double _tempoPrior(double bpm) {
   return math.exp(-0.5 * (x / 0.65) * (x / 0.65));
 }
 
-({double leadIn, double audibleEnd, double energy, double peakDb})
-_rmsStats(Float32List samples, int sampleRate, double duration) {
+({double leadIn, double audibleEnd, double energy, double peakDb}) _rmsStats(
+  Float32List samples,
+  int sampleRate,
+  double duration,
+) {
   const frameSize = 2048;
   const hop = 512;
   final rms = <double>[];
@@ -489,11 +562,7 @@ _rmsStats(Float32List samples, int sampleRate, double duration) {
   );
 }
 
-Float32List _downsample(
-  Float32List samples,
-  int sourceRate,
-  int targetRate,
-) {
+Float32List _downsample(Float32List samples, int sourceRate, int targetRate) {
   if (sourceRate <= targetRate) return samples;
   final factor = sourceRate / targetRate;
   final length = (samples.length / factor).floor();

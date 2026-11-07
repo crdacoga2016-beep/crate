@@ -56,6 +56,8 @@ class PlayerService {
   double _preparedRate = 1;
   double _preampDb = 0;
   EqState _currentEq = EqState.flat;
+  AudioOutputProfile _eqOutputProfile = AudioOutputProfile.speaker;
+  bool _useNativeLimiter = false;
   bool _shelfFiltersUnavailable = false;
   Completer<void>? _fadeCompleter;
 
@@ -210,7 +212,11 @@ class PlayerService {
     return setEq(EqState.migratedFromLegacy(bassDb: bass, trebleDb: treble));
   }
 
-  Future<void> setEq(EqState eq) async {
+  Future<void> setEq(
+    EqState eq, {
+    AudioOutputProfile outputProfile = AudioOutputProfile.speaker,
+  }) async {
+    _eqOutputProfile = outputProfile;
     _currentEq = eq.normalized();
     for (final deck in _decks) {
       deck.eq = _currentEq;
@@ -219,6 +225,16 @@ class PlayerService {
     if (_fadeTimer == null) {
       await _applyDeckVolume(_a);
     }
+  }
+
+  bool get nativeLimiterRequested => _useNativeLimiter;
+
+  void setUseNativeLimiter(bool value) {
+    _useNativeLimiter = value;
+    logLine(
+      'native limiter requested=$value; custom output pending, '
+      'media_kit output retained',
+    );
   }
 
   bool get _preferShelfFilters {
@@ -246,13 +262,17 @@ class PlayerService {
     }
   }
 
-  double _eqHeadroomGainFor(_Deck deck) => deck.eq.smartHeadroomGain;
+  double _eqHeadroomGainFor(_Deck deck) =>
+      deck.eq.smartHeadroomGainFor(_eqOutputProfile);
+
+  double get _effectivePreampDb =>
+      _currentEq.effectivePreampDbFor(_preampDb, _eqOutputProfile);
 
   double _deckLinearGain(_Deck deck, {double fadeGain = 1.0}) {
     var linearGain = combinedLinearGain(
       userVolume: _userVolume,
       trackGain: deck.gain,
-      preampDb: _preampDb,
+      preampDb: _effectivePreampDb,
       fadeGain: fadeGain,
       eqHeadroomGain: _eqHeadroomGainFor(deck),
     );

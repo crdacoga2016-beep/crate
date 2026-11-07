@@ -343,6 +343,15 @@ class SettingsScreen extends StatelessWidget {
                     'Etiquetas de ganancia y pico por pista o álbum',
                   ),
                 ),
+                SwitchListTile(
+                  value: state.useNativeLimiter,
+                  onChanged: state.setUseNativeLimiter,
+                  secondary: const Icon(Icons.memory_outlined),
+                  title: const Text(
+                    'Usar limitador del motor nativo (Experimental offline)',
+                  ),
+                  subtitle: Text(state.nativeAudioEngineStatus.message),
+                ),
                 ListTile(
                   leading: const Icon(Icons.bolt_rounded),
                   title: const Text('Preamp'),

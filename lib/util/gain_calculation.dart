@@ -58,6 +58,7 @@ double trackGainFor({
   required bool normalize,
   double? lufs,
   double? peakDb,
+  double? truePeakDb,
   double? replayGainDb,
   double? replayGainPeakDb,
   double targetLufs = normalizeTargetLufs,
@@ -67,7 +68,10 @@ double trackGainFor({
   if (normalize && lufs != null && lufs.isFinite) {
     gain = dbToLinearGain(targetLufs - lufs);
   }
-  if (peakDb != null && peakDb.isFinite) {
+  if (truePeakDb != null && truePeakDb.isFinite) {
+    final ceilingGain = dbToLinearGain(ceilingDb - truePeakDb);
+    if (gain > ceilingGain) gain = ceilingGain;
+  } else if (peakDb != null && peakDb.isFinite) {
     final ceilingGain = dbToLinearGain(ceilingDb - peakDb);
     if (gain > ceilingGain) gain = ceilingGain;
   }

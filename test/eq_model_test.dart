@@ -30,6 +30,7 @@ void main() {
         'soft_bass',
         'vocal',
         'bluetooth',
+        'speaker_powerful',
       ]);
       for (final preset in eqPresets) {
         expect(preset.gainsDb.length, eqBandFrequencies.length);
@@ -88,6 +89,62 @@ void main() {
       expect(state.responseDbAtHz(1000.0), closeTo(6.0, 0.01));
       expect(state.responseDbAtHz(100.0), greaterThan(0.0));
       expect(state.responseDbAtHz(100.0), lessThan(6.0));
+    });
+
+    test(
+      'el preset Altavoz Potente activa el cuerpo y agudos sin subgraves',
+      () {
+        final preset = EqState.fromPreset('speaker_powerful');
+
+        expect(preset.gainsDb, [
+          0.0,
+          0.0,
+          4.0,
+          5.0,
+          0.0,
+          0.0,
+          2.0,
+          2.5,
+          1.0,
+          0.0,
+        ]);
+        expect(preset.gainsDb[0], 0.0);
+        expect(preset.gainsDb[1], 0.0);
+        expect(preset.gainsDb[2], greaterThan(0.0));
+        expect(preset.gainsDb[3], greaterThan(0.0));
+        expect(preset.gainsDb[6], greaterThan(0.0));
+        expect(preset.gainsDb[7], greaterThan(0.0));
+      },
+    );
+
+    test('el altavoz ignora 31 y 62 Hz al calcular headroom', () {
+      final gains = List<double>.filled(eqBandFrequencies.length, 0.0);
+      gains[0] = 12.0;
+      gains[1] = 12.0;
+      gains[5] = 6.0;
+      final state = EqState(gainsDb: gains);
+
+      expect(
+        state.maximumResponseDbFor(AudioOutputProfile.speaker),
+        closeTo(6.0, 0.05),
+      );
+      expect(
+        state.smartHeadroomDbFor(AudioOutputProfile.speaker),
+        closeTo(-6.5, 0.05),
+      );
+      expect(
+        state.maximumResponseDbFor(AudioOutputProfile.headphones),
+        greaterThan(12.0),
+      );
+      expect(
+        state.smartHeadroomDbFor(AudioOutputProfile.headphones),
+        lessThan(-12.5),
+      );
+      expect(state.effectivePreampDbFor(-1.0, AudioOutputProfile.speaker), 2.0);
+      expect(
+        state.effectivePreampDbFor(-1.0, AudioOutputProfile.headphones),
+        -1.0,
+      );
     });
 
     test('flat tiene respuesta cero y no requiere headroom', () {
